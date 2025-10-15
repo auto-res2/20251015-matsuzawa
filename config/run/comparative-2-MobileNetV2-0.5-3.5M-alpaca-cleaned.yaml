@@ -4,6 +4,7 @@ model:
   name: MobileNetV2
   variant: 0.5
   architecture: charCNN   # MobileNet blocks re-purposed for 1-D character convolutions
+  vocab_size: 97
   embedding_dim: 16
   seq_length: 512
   num_parameters: 3.5e6
@@ -32,6 +33,7 @@ training:
     gamma: 0.7
   seed: 42
   device: cpu
+  num_workers: 2
 
 optuna:
   n_trials: 20

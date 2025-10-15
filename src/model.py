@@ -192,6 +192,15 @@ def model_num_parameters(model: nn.Module) -> int:
 def build_model(model_cfg: DictConfig) -> nn.Module:  # noqa: C901
     name = model_cfg.name.lower()
     if name == "mobilenetv2":
+        arch = getattr(model_cfg, "architecture", "").lower()
+        if arch == "charcnn":
+            return CharMobileNet(
+                vocab_size=getattr(model_cfg, "vocab_size", 100),
+                embedding_dim=model_cfg.embedding_dim,
+                seq_length=model_cfg.seq_length,
+                num_classes=model_cfg.num_classes,
+                dropout=model_cfg.dropout,
+            )
         return MobileNetV2(
             num_classes=model_cfg.num_classes,
             width_mult=getattr(model_cfg, "width_multiplier", 1.0),

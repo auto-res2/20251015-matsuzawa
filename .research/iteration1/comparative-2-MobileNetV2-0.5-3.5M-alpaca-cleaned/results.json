@@ -1,16 +1,30 @@
 {
   "run_id": "comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned",
-  "best_val_accuracy": 0.55,
-  "epochs_ran": 1,
-  "history": [
-    {
-      "epoch": 1,
-      "train_loss": 0.9184917545318604,
-      "train_acc": 0.494,
-      "val_loss": 0.7025639748573304,
-      "val_acc": 0.55,
-      "val_inference_time": 0.00038990259170532224
-    }
-  ],
-  "model_parameters": 3994502
+  "method": "comparative-2",
+  "dataset": "alpaca-cleaned",
+  "model": "MobileNetV2",
+  "final_val_accuracy": 1.0,
+  "final_val_f1": 1.0,
+  "inference_time_ms": 167.8154617547989,
+  "model_num_params": 75154,
+  "history": {
+    "epoch": [
+      1
+    ],
+    "train_loss": [
+      0.0012860596934325978
+    ],
+    "train_acc": [
+      0.9997853386283139
+    ],
+    "val_loss": [
+      1.672605937093739e-05
+    ],
+    "val_acc": [
+      1.0
+    ],
+    "val_f1": [
+      1.0
+    ]
+  }
 }

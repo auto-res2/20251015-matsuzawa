@@ -28,6 +28,7 @@ training:
     warmup_steps: 300
   seed: 42
   device: cpu
+  num_workers: 2
 
 optuna:
   n_trials: 20

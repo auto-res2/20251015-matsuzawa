@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 import torchvision.transforms as T
 from torchvision.datasets import CIFAR10
 from omegaconf import DictConfig
+from datasets import load_dataset
 
 # ----------------------------------------------------------------------------
 # Text dataset utilities
@@ -17,13 +18,20 @@ from omegaconf import DictConfig
 class AlpacaCharDataset(Dataset):
     """Character-level dataset for Alpaca-cleaned."""
 
-    def __init__(self, file_path: Path, seq_length: int, char2idx: dict):
+    def __init__(self, data_source, seq_length: int, char2idx: dict):
         self.samples = []
-        with file_path.open("r", encoding="utf-8") as f:
-            for line in f:
-                obj = json.loads(line)
-                text, label = obj["text"], obj["label"]
-                self.samples.append((text.lower(), int(label)))
+        if isinstance(data_source, Path):
+            with data_source.open("r", encoding="utf-8") as f:
+                for line in f:
+                    obj = json.loads(line)
+                    text, label = obj["text"], obj["label"]
+                    self.samples.append((text.lower(), int(label)))
+        else:
+            for item in data_source:
+                if "instruction" in item and "output" in item:
+                    text = f"{item['instruction']} {item.get('input', '')} {item['output']}"
+                    label = 1 if len(item['output']) > 0 else 0
+                    self.samples.append((text.lower(), label))
         self.seq_length = seq_length
         self.char2idx = char2idx
         self.pad_idx = self.char2idx["<pad>"]
@@ -95,7 +103,6 @@ def _build_cifar10(cfg: DictConfig):
 
 
 def _build_alpaca(cfg: DictConfig):
-    path = Path(cfg.dataset.path) / "train.jsonl"
     seq_length = cfg.dataset.max_length
     # Build character vocabulary (simple lowercase ascii + specials)
     all_chars = [chr(i) for i in range(32, 127)]
@@ -103,7 +110,17 @@ def _build_alpaca(cfg: DictConfig):
     char2idx["<pad>"] = 0
     char2idx["<unk>"] = 1
 
-    full_dataset = AlpacaCharDataset(path, seq_length, char2idx)
+    path = Path(cfg.dataset.path)
+    if path.exists() and (path / "train.jsonl").exists():
+        data_source = path / "train.jsonl"
+    else:
+        try:
+            hf_dataset = load_dataset("yahma/alpaca-cleaned", split="train")
+            data_source = hf_dataset
+        except Exception as e:
+            raise RuntimeError(f"Failed to load dataset from path {path} or Hugging Face: {e}")
+
+    full_dataset = AlpacaCharDataset(data_source, seq_length, char2idx)
     val_size = int((1 - cfg.dataset.split.train) * len(full_dataset))
     train_size = len(full_dataset) - val_size
     train_set, val_set = random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(cfg.training.seed))
