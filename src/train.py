@@ -126,63 +126,68 @@ def measure_inference_time(model: nn.Module, device: torch.device, sample: torch
 
 @hydra.main(config_path="../config", config_name="config", version_base=None)
 def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
+    # Extract run config
+    run_cfg = cfg.run
+    
     # Apply trial-mode overrides (epochs=1, no Optuna)
     if cfg.trial_mode:
-        cfg.training.epochs = 1
-        cfg.optuna.n_trials = 0
+        OmegaConf.set_struct(run_cfg, False)
+        run_cfg.training.epochs = 1
+        run_cfg.optuna.n_trials = 0
+        OmegaConf.set_struct(run_cfg, True)
 
     # Create results directory structure
     results_root = Path(hydra.utils.to_absolute_path(cfg.results_dir))
-    run_dir = results_root / cfg.run_id
+    run_dir = results_root / run_cfg.run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------------------------------------------------------------------
     # Logging & description
     # ---------------------------------------------------------------------
-    log_experiment_description(cfg)
+    log_experiment_description(run_cfg)
 
     # ---------------------------------------------------------------------
     # Seed / device
     # ---------------------------------------------------------------------
-    set_seed(cfg.training.seed)
-    device = get_device(cfg)
+    set_seed(run_cfg.training.seed)
+    device = get_device(run_cfg)
 
     # ---------------------------------------------------------------------
     # Data
     # ---------------------------------------------------------------------
-    train_loader, val_loader, sample_batch = build_dataloaders(cfg)
+    train_loader, val_loader, sample_batch = build_dataloaders(run_cfg)
 
     # ---------------------------------------------------------------------
     # Model
     # ---------------------------------------------------------------------
-    model = build_model(cfg.model).
+    model = build_model(run_cfg.model)
     num_params = model_num_parameters(model)
     model.to(device)
 
     # ---------------------------------------------------------------------
     # Optimizer & Criterion
     # ---------------------------------------------------------------------
-    if cfg.training.optimizer.name.lower() == "sgd":
+    if run_cfg.training.optimizer.name.lower() == "sgd":
         optimizer = optim.SGD(
             model.parameters(),
-            lr=cfg.training.optimizer.lr,
-            momentum=cfg.training.optimizer.momentum,
-            weight_decay=cfg.training.optimizer.weight_decay,
+            lr=run_cfg.training.optimizer.lr,
+            momentum=run_cfg.training.optimizer.momentum,
+            weight_decay=run_cfg.training.optimizer.weight_decay,
         )
-    elif cfg.training.optimizer.name.lower() == "adam":
+    elif run_cfg.training.optimizer.name.lower() == "adam":
         optimizer = optim.Adam(
             model.parameters(),
-            lr=cfg.training.optimizer.lr,
-            weight_decay=cfg.training.optimizer.weight_decay,
+            lr=run_cfg.training.optimizer.lr,
+            weight_decay=run_cfg.training.optimizer.weight_decay,
         )
-    elif cfg.training.optimizer.name.lower() in {"adamw", "adam_w"}:
+    elif run_cfg.training.optimizer.name.lower() in {"adamw", "adam_w"}:
         optimizer = optim.AdamW(
             model.parameters(),
-            lr=cfg.training.optimizer.lr,
-            weight_decay=cfg.training.optimizer.weight_decay,
+            lr=run_cfg.training.optimizer.lr,
+            weight_decay=run_cfg.training.optimizer.weight_decay,
         )
     else:
-        raise ValueError(f"Unsupported optimizer {cfg.training.optimizer.name}")
+        raise ValueError(f"Unsupported optimizer {run_cfg.training.optimizer.name}")
 
     criterion = nn.CrossEntropyLoss()
 
@@ -196,10 +201,10 @@ def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
         wb_run = wandb.init(
             project=cfg.wandb.project,
             entity=cfg.wandb.entity,
-            config=OmegaConf.to_container(cfg, resolve=True),
+            config=OmegaConf.to_container(run_cfg, resolve=True),
             reinit=True,
             mode=wb_mode,
-            name=cfg.run_id,
+            name=run_cfg.run_id,
         )
         # Save WandB metadata for later GI actions
         metadata = {
@@ -217,7 +222,7 @@ def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
     history = {"epoch": [], "train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "val_f1": []}
 
     best_val_acc = 0.0
-    for epoch in range(1, cfg.training.epochs + 1):
+    for epoch in range(1, run_cfg.training.epochs + 1):
         t_start = time.perf_counter()
         train_loss, train_acc = train_one_epoch(model, criterion, optimizer, device, train_loader)
         val_loss, val_acc, val_f1 = evaluate(model, criterion, device, val_loader)
@@ -258,10 +263,10 @@ def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
     inf_time = measure_inference_time(model, device, sample_batch)
 
     results: Dict[str, Any] = {
-        "run_id": cfg.run_id,
-        "method": cfg.method,
-        "dataset": cfg.dataset.name,
-        "model": cfg.model.name,
+        "run_id": run_cfg.run_id,
+        "method": run_cfg.method,
+        "dataset": run_cfg.dataset.name,
+        "model": run_cfg.model.name,
         "final_val_accuracy": history["val_acc"][-1],
         "final_val_f1": history["val_f1"][-1],
         "inference_time_ms": inf_time,

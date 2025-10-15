@@ -25,14 +25,51 @@ def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
     summary: List[Dict] = []
     for rf in result_files:
         with rf.open("r", encoding="utf-8") as f:
-            summary.append(json.load(f))
+            data = json.load(f)
+            summary.append(data)
 
-    # Prepare plots
-    run_ids = [r["run_id"] for r in summary]
-    accuracies = [r["final_val_accuracy"] for r in summary]
-    f1s = [r["final_val_f1"] for r in summary]
-    inference = [r["inference_time_ms"] for r in summary]
-    params = [r["model_num_params"] for r in summary]
+    # Prepare plots - handle different schemas
+    run_ids = []
+    accuracies = []
+    f1s = []
+    inference = []
+    params = []
+    
+    for r in summary:
+        run_ids.append(r["run_id"])
+        
+        # Handle different accuracy field names
+        if "final_val_accuracy" in r:
+            accuracies.append(r["final_val_accuracy"])
+        elif "best_val_accuracy" in r:
+            accuracies.append(r["best_val_accuracy"])
+        else:
+            accuracies.append(0.0)
+        
+        # Handle different f1 field names
+        if "final_val_f1" in r:
+            f1s.append(r["final_val_f1"])
+        else:
+            f1s.append(0.0)
+        
+        # Handle different inference time field names
+        if "inference_time_ms" in r:
+            inference.append(r["inference_time_ms"])
+        elif "history" in r and len(r["history"]) > 0:
+            if isinstance(r["history"], list):
+                inference.append(r["history"][-1].get("val_inference_time", 0.0) * 1000)
+            else:
+                inference.append(0.0)
+        else:
+            inference.append(0.0)
+        
+        # Handle different params field names
+        if "model_num_params" in r:
+            params.append(r["model_num_params"])
+        elif "model_parameters" in r:
+            params.append(r["model_parameters"])
+        else:
+            params.append(0)
 
     x = np.arange(len(run_ids))
     width = 0.2

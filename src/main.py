@@ -11,7 +11,8 @@ from omegaconf import DictConfig, OmegaConf
 
 @hydra.main(config_path="../config", config_name="config", version_base=None)
 def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
-    run_id = cfg.run
+    # Get run_id from the loaded config (merged from run/ yaml)
+    run_id = cfg.get("run_id", "unknown")
     results_dir = Path(hydra.utils.to_absolute_path(cfg.results_dir)).as_posix()
 
     # ------------------------------------------------------------------
@@ -22,9 +23,14 @@ def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
         "-u",
         "-m",
         "src.train",
-        f"run={run_id}",
         f"results_dir={results_dir}",
     ]
+    # Pass the run override from command line if present
+    for arg in sys.argv[1:]:
+        if arg.startswith("run="):
+            cmd.append(arg)
+            break
+    
     # Propagate flags
     if cfg.trial_mode:
         cmd.append("trial_mode=true")

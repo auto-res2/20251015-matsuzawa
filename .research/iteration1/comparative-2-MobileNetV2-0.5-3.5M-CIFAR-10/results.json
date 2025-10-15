@@ -1,16 +1,30 @@
 {
   "run_id": "comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10",
-  "best_val_accuracy": 0.312,
-  "epochs_ran": 1,
-  "history": [
-    {
-      "epoch": 1,
-      "train_loss": 2.0978770613776314,
-      "train_acc": 0.2088888888888889,
-      "val_loss": 1.8643188583374024,
-      "val_acc": 0.312,
-      "val_inference_time": 0.0002904928207397461
-    }
-  ],
-  "model_parameters": 697258
+  "method": "comparative-2",
+  "dataset": "CIFAR-10",
+  "model": "MobileNetV2",
+  "final_val_accuracy": 0.3424684936987398,
+  "final_val_f1": 0.3230743252152909,
+  "inference_time_ms": 20.0166217982769,
+  "model_num_params": 697258,
+  "history": {
+    "epoch": [
+      1
+    ],
+    "train_loss": [
+      1.99552267996598
+    ],
+    "train_acc": [
+      0.2683718139596898
+    ],
+    "val_loss": [
+      1.7834312506832344
+    ],
+    "val_acc": [
+      0.3424684936987398
+    ],
+    "val_f1": [
+      0.3230743252152909
+    ]
+  }
 }

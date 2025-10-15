@@ -9,7 +9,7 @@ model:
   dropout: 0.2
 dataset:
   name: CIFAR-10
-  path: /datasets/cifar10
+  path: ./data/cifar10
   num_classes: 10
   input_size: 32
   channels: 3
