@@ -2,31 +2,34 @@ run_id: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
 method: comparative-2
 model:
   name: MobileNetV2
-  width_mult: 0.5
-  num_params: 3.5M
-  pretrained: false
-  dropout: 0.2
+  variant: 0.5
+  num_parameters: 3.5M
+  pretrained: true
+  width_multiplier: 0.5
 dataset:
   name: CIFAR-10
-  image_size: 32
+  input_size: 32
   normalization:
     mean: [0.4914, 0.4822, 0.4465]
     std: [0.2023, 0.1994, 0.2010]
   augmentations:
-    random_crop: true
-    random_flip: true
+    - random_crop
+    - horizontal_flip
+  train_split: 0.9
   val_split: 0.1
 training:
-  compute_device: cpu
-  optimizer: sgd
   learning_rate: 0.01
+  batch_size: 128
+  epochs: 20
+  optimizer: sgd
   momentum: 0.9
   weight_decay: 0.0005
-  batch_size: 128
-  epochs: 120
-  lr_scheduler: cosine
+  scheduler: cosine_annealing
+  num_workers: 2
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
 optuna:
-  n_trials: 20
+  n_trials: 25
+  direction: maximize
   search_space:
     learning_rate:
       type: loguniform
@@ -36,6 +39,10 @@ optuna:
       type: categorical
       choices: [64, 128, 256]
     weight_decay:
-      type: loguniform
-      low: 1e-5
-      high: 1e-2
+      type: uniform
+      low: 0.0
+      high: 0.01
+    momentum:
+      type: uniform
+      low: 0.8
+      high: 0.99

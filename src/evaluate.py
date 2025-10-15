@@ -1,56 +1,71 @@
-import argparse
 import json
+import os
+from glob import glob
 from pathlib import Path
-from typing import Dict, List
 
+import hydra
 import matplotlib.pyplot as plt
+import pandas as pd
+from omegaconf import OmegaConf
 import wandb
 
 
-def gather_results(results_dir: Path, run_ids: List[str]) -> Dict[str, Dict]:
-    all_results = {}
-    for rid in run_ids:
-        result_path = results_dir / rid / "results.json"
-        if result_path.exists():
-            with open(result_path, "r", encoding="utf-8") as fp:
-                all_results[rid] = json.load(fp)
-        else:
-            print(f"Warning: results for {rid} not found at {result_path}")
-    return all_results
+def _load_results(results_dir):
+    result_files = glob(os.path.join(results_dir, "*/results.json"))
+    data = []
+    for fp in result_files:
+        with open(fp, "r", encoding="utf-8") as f:
+            data.append(json.load(f))
+    return pd.DataFrame(data)
 
 
-def plot_comparison(all_results: Dict[str, Dict], save_path: Path):
-    labels = list(all_results.keys())
-    accuracies = [res["best_val_accuracy"] for res in all_results.values()]
-    plt.figure(figsize=(10, 5))
-    plt.bar(labels, accuracies)
-    plt.ylabel("Best Validation Accuracy")
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
-    plt.savefig(save_path)
-    plt.close()
+def _plot(df, save_path):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    for _, row in df.iterrows():
+        ax.scatter(row["model_size_mb"], row["val_accuracy"], label=row["run_id"])
+    ax.set_xlabel("Model size (MB)")
+    ax.set_ylabel("Validation Accuracy")
+    ax.legend(fontsize=6)
+    ax.set_title("Accuracy vs Model Size")
+    fig.tight_layout()
+    fig.savefig(save_path)
+    plt.close(fig)
 
 
-def main(results_dir: str, run_ids: List[str]):
-    results_dir = Path(results_dir)
-    all_results = gather_results(results_dir, run_ids)
+@hydra.main(config_path="../config", config_name="config", version_base=None)
+def evaluate_app(cfg):
+    results_dir = Path(cfg.results_dir)
+    df = _load_results(results_dir)
+    if df.empty:
+        print("No results found in", results_dir)
+        return
+    best_row = df.sort_values("val_accuracy", ascending=False).iloc[0]
+    comparison = {
+        "best_run_id": best_row["run_id"],
+        "best_val_accuracy": best_row["val_accuracy"],
+        "runs": df.to_dict(orient="records"),
+    }
+    # Plot
+    plot_path = results_dir / "accuracy_vs_model_size.png"
+    _plot(df, plot_path)
 
-    # Print aggregated JSON
-    print(json.dumps(all_results, indent=2))
+    # Optionally log to WandB if metadata exists
+    md_path = results_dir / "wandb_metadata.json"
+    if md_path.exists():
+        with open(md_path, "r", encoding="utf-8") as f:
+            md = json.load(f)
+        wandb_run = wandb.init(
+            entity=md["wandb_entity"],
+            project=md["wandb_project"],
+            id=md["wandb_run_id"],
+            resume="allow",
+        )
+        wandb_run.log({"comparison_plot": wandb.Image(str(plot_path))})
+        wandb_run.finish()
 
-    # Plot comparison figure
-    fig_path = results_dir / "comparison.png"
-    plot_comparison(all_results, fig_path)
-
-    # Upload to WandB as artifact
-    wandb_run = wandb.init(project="251015-test", entity="gengaru617", name="evaluation", job_type="evaluation")
-    wandb_run.log({"comparison_plot": wandb.Image(str(fig_path))})
-    wandb_run.finish()
+    # Print JSON to STDOUT
+    print(json.dumps(comparison))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("results_dir", type=str, help="Path where result folders live")
-    parser.add_argument("--run_ids", nargs="*", required=True)
-    args = parser.parse_args()
-    main(args.results_dir, args.run_ids)
+    evaluate_app()

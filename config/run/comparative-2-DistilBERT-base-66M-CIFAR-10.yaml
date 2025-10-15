@@ -4,33 +4,43 @@ model:
   name: distilbert-base-uncased
   hidden_size: 768
   num_layers: 6
-  num_params: 66M
-  dropout: 0.1
+  num_parameters: 66M
+  pretrained: true
 dataset:
   name: CIFAR-10
-  image_size: 32
-  encoding_strategy: raw_pixels_to_tokens
+  representation: patch_sequence
+  patch_size: 4
+  input_size: 32
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std: [0.2023, 0.1994, 0.2010]
+  train_split: 0.9
   val_split: 0.1
 training:
-  compute_device: cpu
+  learning_rate: 0.0001
+  batch_size: 64
+  epochs: 10
   optimizer: adamw
-  learning_rate: 2e-5
   weight_decay: 0.01
-  batch_size: 16
-  epochs: 5
-  warmup_steps: 200
-  max_grad_norm: 1.0
+  warmup_steps: 500
+  scheduler: linear
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
 optuna:
   n_trials: 20
+  direction: maximize
   search_space:
     learning_rate:
       type: loguniform
-      low: 1e-6
-      high: 5e-4
+      low: 1e-5
+      high: 1e-3
     batch_size:
       type: categorical
-      choices: [8, 16, 32]
-    dropout:
+      choices: [32, 64, 128]
+    weight_decay:
       type: uniform
-      low: 0.05
-      high: 0.3
+      low: 0.0
+      high: 0.1
+    dataset_patch_size:
+      type: int
+      low: 2
+      high: 8

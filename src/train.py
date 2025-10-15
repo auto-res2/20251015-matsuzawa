@@ -1,233 +1,327 @@
-import json
 import os
-import random
-import shutil
-import sys
+import json
+import time
+import copy
 from pathlib import Path
-from typing import Any, Dict
 
 import hydra
-import numpy as np
-import optuna
 import torch
-import torch.nn.functional as F
+from omegaconf import OmegaConf
+from hydra.utils import to_absolute_path
+from sklearn.metrics import accuracy_score, f1_score
 import wandb
-from hydra.utils import instantiate, get_original_cwd
-from omegaconf import DictConfig, OmegaConf
-from torch import nn, optim
-from torch.utils.data import DataLoader
+import optuna
 
-from .model import build_model
-from .preprocess import build_dataloaders, seed_everything
+from .preprocess import get_dataloaders
+from .model import build_model, compute_model_size
 
-# ----------------- Helper functions -----------------
+# ------------------------------------------------------------
+# Helper utilities
+# ------------------------------------------------------------
 
-def save_wandb_metadata(run_dir: Path, iteration: int, wandb_run: wandb.run) -> None:
-    meta_dir = Path(get_original_cwd()) / f".research/iteration{iteration}"
-    meta_dir.mkdir(parents=True, exist_ok=True)
-    meta_path = meta_dir / "wandb_metadata.json"
-    metadata = {
-        "wandb_entity": wandb_run.entity,
-        "wandb_project": wandb_run.project,
-        "wandb_run_id": wandb_run.id,
-    }
-    with open(meta_path, "w", encoding="utf-8") as fp:
-        json.dump(metadata, fp, indent=2)
+def _save_json(obj, path):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2)
 
 
-def train_one_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: optim.Optimizer,
-    device: torch.device,
-) -> Dict[str, float]:
+def _train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
-    loss_meter, correct, total = 0.0, 0, 0
+    epoch_loss = 0.0
+    preds, gts = [], []
     for batch in loader:
-        inputs, labels = batch["inputs"].to(device), batch["labels"].to(device)
         optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = F.cross_entropy(outputs, labels)
+        if isinstance(batch, dict):  # text-like dict batch
+            labels = batch.pop("labels")
+            batch = {k: v.to(device) for k, v in batch.items()}
+            labels = labels.to(device)
+            outputs = model(**batch, labels=labels)
+            loss = outputs.loss
+            logits = outputs.logits
+        else:
+            inputs, labels = batch
+            inputs, labels = inputs.to(device), labels.to(device)
+            logits = model(inputs)
+            loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
-        loss_meter += loss.item() * labels.size(0)
-        preds = outputs.argmax(dim=1)
-        correct += (preds == labels).sum().item()
-        total += labels.size(0)
-    return {
-        "loss": loss_meter / total,
-        "accuracy": correct / total,
-    }
+        epoch_loss += loss.item() * labels.size(0)
+        preds.extend(torch.argmax(logits, dim=-1).detach().cpu().tolist())
+        gts.extend(labels.detach().cpu().tolist())
+    epoch_loss /= len(loader.dataset)
+    acc = accuracy_score(gts, preds)
+    f1 = f1_score(gts, preds, average="macro")
+    return epoch_loss, acc, f1
 
 
-def evaluate(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-) -> Dict[str, float]:
+def _evaluate(model, loader, criterion, device):
     model.eval()
-    loss_meter, correct, total = 0.0, 0, 0
+    preds, gts = [], []
+    eval_loss = 0.0
     with torch.no_grad():
         for batch in loader:
-            inputs, labels = batch["inputs"].to(device), batch["labels"].to(device)
-            outputs = model(inputs)
-            loss = F.cross_entropy(outputs, labels)
-            loss_meter += loss.item() * labels.size(0)
-            preds = outputs.argmax(dim=1)
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
-    return {
-        "loss": loss_meter / total,
-        "accuracy": correct / total,
-    }
+            if isinstance(batch, dict):
+                labels = batch.pop("labels")
+                batch = {k: v.to(device) for k, v in batch.items()}
+                labels = labels.to(device)
+                outputs = model(**batch, labels=labels)
+                loss = outputs.loss
+                logits = outputs.logits
+            else:
+                inputs, labels = batch
+                inputs, labels = inputs.to(device), labels.to(device)
+                logits = model(inputs)
+                loss = criterion(logits, labels)
+            eval_loss += loss.item() * labels.size(0)
+            preds.extend(torch.argmax(logits, dim=-1).cpu().tolist())
+            gts.extend(labels.cpu().tolist())
+    eval_loss /= len(loader.dataset)
+    acc = accuracy_score(gts, preds)
+    f1 = f1_score(gts, preds, average="macro")
+    return eval_loss, acc, f1
 
 
-# ----------------- Optuna objective -----------------
+# ------------------------------------------------------------
+# Optuna objective
+# ------------------------------------------------------------
 
-def objective(trial: optuna.Trial, cfg: DictConfig) -> float:
-    # Sample hyper-parameters according to cfg.optuna.search_space
-    for key, space in cfg.optuna.search_space.items():
-        if space["type"] == "loguniform":
-            sampled = trial.suggest_float(key, space["low"], space["high"], log=True)
-        elif space["type"] == "uniform":
-            sampled = trial.suggest_float(key, space["low"], space["high"], log=False)
-        elif space["type"] == "categorical":
-            sampled = trial.suggest_categorical(key, space["choices"])
-        else:
-            raise ValueError(f"Unsupported optuna space type: {space['type']}")
-        OmegaConf.update(cfg, key, sampled, merge=False)
+def _objective_factory(base_cfg, results_dir, device):
+    def objective(trial):
+        cfg = copy.deepcopy(base_cfg)
+        # override with suggested hyperparameters
+        for key, spec in cfg.optuna.search_space.items():
+            if spec["type"] == "loguniform":
+                val = trial.suggest_float(key, spec["low"], spec["high"], log=True)
+            elif spec["type"] == "uniform":
+                val = trial.suggest_float(key, spec["low"], spec["high"])
+            elif spec["type"] == "categorical":
+                val = trial.suggest_categorical(key, spec["choices"])
+            elif spec["type"] == "int":
+                val = trial.suggest_int(key, spec["low"], spec["high"])
+            else:
+                raise ValueError(f"Unsupported Optuna param type: {spec['type']}")
+            # write back into cfg
+            if key in cfg.training:
+                cfg.training[key] = val
+            elif key.startswith("dataset_") and hasattr(cfg.dataset, key[8:]):
+                setattr(cfg.dataset, key[8:], val)
+            else:
+                OmegaConf.set_struct(cfg, False)
+                OmegaConf.update(cfg, key, val)
+        # run a single training pass with new hyperparams
+        metrics = _run_training(cfg, results_dir, device, log_to_wandb=False)
+        return metrics["val_accuracy"]
 
-    # Build dataloaders/model
-    train_loader, val_loader, num_classes = build_dataloaders(cfg)
-    model = build_model(cfg, num_classes)
-    device = torch.device("cpu") if cfg.training.compute_device == "cpu" or not torch.cuda.is_available() else torch.device("cuda")
+    return objective
+
+
+# ------------------------------------------------------------
+# Core training routine (single hyper-parameter configuration)
+# ------------------------------------------------------------
+
+def _run_training(cfg, results_dir, device, log_to_wandb=True):
+    # Data
+    train_loader, val_loader, num_classes, vocab_size = get_dataloaders(cfg, trial_mode=cfg.trial_mode)
+    # Model
+    model = build_model(cfg, num_classes=num_classes, vocab_size=vocab_size)
     model.to(device)
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=cfg.training.learning_rate,
-        weight_decay=cfg.training.get("weight_decay", 0.0),
-    )
 
-    for _ in range(min(5, cfg.training.epochs)):  # Restrict for efficiency inside Optuna
-        train_one_epoch(model, train_loader, optimizer, device)
-    metrics = evaluate(model, val_loader, device)
-    return metrics["loss"]
-
-
-# ----------------- Main training entry -----------------
-
-@hydra.main(config_path="../config", config_name="config", version_base=None)
-def train_main(cfg: DictConfig) -> None:
-    original_cwd = Path(get_original_cwd())
-
-    # Handle trial_mode overrides
-    if cfg.get("trial_mode", False):
-        cfg.training.epochs = 1
-        cfg.optuna.n_trials = 0
-        cfg.training.batch_size = min(8, cfg.training.batch_size)
-
-    seed_everything(42)
-
-    # Build dataloaders
-    train_loader, val_loader, num_classes = build_dataloaders(cfg)
-
-    # Build model
-    model = build_model(cfg, num_classes)
-
-    device = torch.device("cpu") if cfg.training.compute_device == "cpu" or not torch.cuda.is_available() else torch.device("cuda")
-    model.to(device)
+    # Criterion
+    criterion = torch.nn.CrossEntropyLoss()
 
     # Optimizer
     if cfg.training.optimizer == "sgd":
-        optimizer = optim.SGD(
+        optimizer = torch.optim.SGD(
             model.parameters(),
             lr=cfg.training.learning_rate,
             momentum=cfg.training.get("momentum", 0.0),
-            weight_decay=cfg.training.get("weight_decay", 0.0),
+            weight_decay=cfg.training.weight_decay,
         )
-    elif cfg.training.optimizer in ["adam", "adamw"]:
-        optimizer_cls = optim.AdamW if cfg.training.optimizer == "adamw" else optim.Adam
-        optimizer = optimizer_cls(
+    else:  # adamw
+        optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=cfg.training.learning_rate,
-            weight_decay=cfg.training.get("weight_decay", 0.0),
+            weight_decay=cfg.training.weight_decay,
+        )
+
+    # Scheduler
+    if cfg.training.get("scheduler") == "cosine_annealing":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.epochs)
+    elif cfg.training.get("scheduler") == "linear":
+        total_steps = len(train_loader) * cfg.training.epochs
+        warmup_steps = cfg.training.get("warmup_steps", 0)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lambda step: min(1.0, step / max(1, warmup_steps)) if step < warmup_steps else max(
+                0.0, (total_steps - step) / max(1, total_steps - warmup_steps)
+            ),
         )
     else:
-        raise ValueError(f"Unsupported optimizer {cfg.training.optimizer}")
+        scheduler = None
 
-    # LR Scheduler (simple cosine)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.epochs) if cfg.training.lr_scheduler == "cosine" else None
-
-    # Initialise WandB
-    wandb_run = wandb.init(
-        entity=cfg.wandb.entity,
-        project=cfg.wandb.project,
-        name=cfg.run_id,
-        tags=[cfg.method, cfg.dataset.name, cfg.model.name],
-        config=OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True),
-    )
-    print(f"WandB URL: {wandb_run.url}")
-
-    # Save WandB metadata
-    iteration = int(os.environ.get("EXPERIMENT_ITERATION", "0"))
-    run_dir = Path(cfg.results_dir) / cfg.run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    save_wandb_metadata(run_dir, iteration, wandb_run)
-
-    # Optuna hyper-parameter optimisation
-    if cfg.optuna.n_trials > 0 and not cfg.get("trial_mode", False):
-        study = optuna.create_study(direction="minimize")
-        study.optimize(lambda trial: objective(trial, cfg), n_trials=cfg.optuna.n_trials)
-        best_params = study.best_params
-        print(f"Best Optuna params: {best_params}")
-        for k, v in best_params.items():
-            OmegaConf.update(cfg, k, v, merge=False)
-        # rebuild with best parameters
-        train_loader, val_loader, num_classes = build_dataloaders(cfg)
-        model = build_model(cfg, num_classes)
-        model.to(device)
-        optimizer.param_groups[0]["lr"] = cfg.training.learning_rate
+    # WandB
+    wandb_run = None
+    if log_to_wandb:
+        wandb_run = wandb.init(
+            entity=cfg.wandb.entity,
+            project=cfg.wandb.project,
+            name=cfg.wandb.get("run_name", cfg.run_id),
+            tags=list(cfg.wandb.get("tags", [])),
+            config=OmegaConf.to_container(cfg, resolve=True),
+            reinit=True,
+        )
+        # Save metadata immediately
+        md_path = Path(results_dir) / "wandb_metadata.json"
+        _save_json(
+            {
+                "wandb_entity": cfg.wandb.entity,
+                "wandb_project": cfg.wandb.project,
+                "wandb_run_id": wandb_run.id,
+            },
+            md_path,
+        )
+        print(f"WandB URL: {wandb_run.url}")
 
     # Training loop
     history = []
-    for epoch in range(1, cfg.training.epochs + 1):
-        train_metrics = train_one_epoch(model, train_loader, optimizer, device)
-        val_metrics = evaluate(model, val_loader, device)
+    best_val_acc = 0.0
+    for epoch in range(cfg.training.epochs):
+        start_time = time.time()
+        train_loss, train_acc, train_f1 = _train_one_epoch(model, train_loader, criterion, optimizer, device)
+        val_loss, val_acc, val_f1 = _evaluate(model, val_loader, criterion, device)
+        epoch_time = time.time() - start_time
+
         if scheduler is not None:
             scheduler.step()
-        epoch_metrics = {
-            "epoch": epoch,
-            **{f"train_{k}": v for k, v in train_metrics.items()},
-            **{f"val_{k}": v for k, v in val_metrics.items()},
-        }
-        history.append(epoch_metrics)
-        # Log to WandB
-        wandb_run.log(epoch_metrics)
-        print(json.dumps(epoch_metrics))
 
-    # Save final checkpoint & metrics
-    chkpt_path = run_dir / "model_final.pt"
-    torch.save(model.state_dict(), chkpt_path)
-    wandb_run.save(str(chkpt_path))
+        if wandb_run is not None:
+            wandb_run.log(
+                {
+                    "epoch": epoch + 1,
+                    "train_loss": train_loss,
+                    "train_accuracy": train_acc,
+                    "train_f1": train_f1,
+                    "val_loss": val_loss,
+                    "val_accuracy": val_acc,
+                    "val_f1": val_f1,
+                    "epoch_time_sec": epoch_time,
+                }
+            )
+
+        history.append(
+            {
+                "epoch": epoch + 1,
+                "train_loss": train_loss,
+                "train_accuracy": train_acc,
+                "train_f1": train_f1,
+                "val_loss": val_loss,
+                "val_accuracy": val_acc,
+                "val_f1": val_f1,
+                "epoch_time_sec": epoch_time,
+            }
+        )
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(model.state_dict(), os.path.join(results_dir, "best_model.pt"))
+            if wandb_run is not None:
+                wandb_run.save(os.path.join(results_dir, "best_model.pt"))
+
+    # Inference time (simple forward pass on one batch)
+    model.eval()
+    with torch.no_grad():
+        batch = next(iter(val_loader))
+        start = time.time()
+        if isinstance(batch, dict):
+            labels = batch.pop("labels")
+            batch = {k: v.to(device) for k, v in batch.items()}
+            _ = model(**batch)
+        else:
+            inputs, _ = batch
+            _ = model(inputs.to(device))
+        inference_time = time.time() - start
+
+    model_size_mb = compute_model_size(model)
 
     final_results = {
         "run_id": cfg.run_id,
-        "final_epoch": history[-1]["epoch"],
-        "best_val_accuracy": max(h["val_accuracy"] for h in history),
+        "method": cfg.method,
+        "model_name": cfg.model.name,
+        "dataset": cfg.dataset.name,
+        "val_accuracy": best_val_acc,
+        "val_f1": val_f1,
+        "inference_time_sec": inference_time,
+        "model_size_mb": model_size_mb,
         "history": history,
     }
 
-    with open(run_dir / "results.json", "w", encoding="utf-8") as fp:
-        json.dump(final_results, fp, indent=2)
+    if wandb_run is not None:
+        wandb_run.log({"final/val_accuracy": best_val_acc, "final/model_size_mb": model_size_mb})
+        wandb_run.finish()
 
-    # Print experiment description and final numeric data
-    print("Experiment Description:")
-    print(OmegaConf.to_yaml(cfg))
-    print("Final Results:")
-    print(json.dumps(final_results, indent=2))
+    return final_results
 
-    wandb_run.finish()
+
+# ------------------------------------------------------------
+# Entry-point with Hydra
+# ------------------------------------------------------------
+@hydra.main(config_path="../config", config_name="config", version_base=None)
+def train_app(cfg):
+    """Hydra entry-point for a single training run."""
+    # Load specific run configuration
+    run_cfg_path = to_absolute_path(os.path.join("config", "run", f"{cfg.run}.yaml"))
+    if not os.path.exists(run_cfg_path):
+        raise FileNotFoundError(f"Run config not found: {run_cfg_path}")
+    run_cfg = OmegaConf.merge(cfg, OmegaConf.load(run_cfg_path))
+
+    # Apply trial_mode overrides
+    if cfg.trial_mode:
+        run_cfg.training.epochs = 1
+        run_cfg.optuna.n_trials = 0
+        if run_cfg.dataset.name == "CIFAR-10":
+            run_cfg.dataset.subset_size = 500  # use small subset
+        elif run_cfg.dataset.name == "alpaca-cleaned":
+            run_cfg.dataset.subset_size = 500
+
+    # Make results dir
+    results_dir = Path(to_absolute_path(cfg.results_dir)) / run_cfg.run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist the merged config for record keeping
+    OmegaConf.save(run_cfg, results_dir / "full_config.yaml")
+
+    # Description (printed before results as requested)
+    description = (
+        f"Experiment {run_cfg.run_id}: Method={run_cfg.method}, "
+        f"Model={run_cfg.model.name}, Dataset={run_cfg.dataset.name}, "
+        f"Epochs={run_cfg.training.epochs}, Batch={run_cfg.training.batch_size}"
+    )
+    print(description)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Optuna search or single run
+    if run_cfg.optuna.n_trials > 0:
+        study = optuna.create_study(direction=run_cfg.optuna.direction)
+        objective = _objective_factory(run_cfg, results_dir, device)
+        study.optimize(objective, n_trials=run_cfg.optuna.n_trials)
+        best_value = study.best_value
+        best_params = study.best_params
+        print(f"Best Optuna value={best_value}, params={best_params}")
+        # Merge best params back into config
+        for k, v in best_params.items():
+            if k in run_cfg.training:
+                run_cfg.training[k] = v
+            elif k.startswith("dataset_") and hasattr(run_cfg.dataset, k[8:]):
+                setattr(run_cfg.dataset, k[8:], v)
+
+    # Final training with best / given hyper-parameters
+    final_results = _run_training(run_cfg, results_dir, device)
+
+    # Save results
+    _save_json(final_results, results_dir / "results.json")
+
+    # Print JSON-formatted results to STDOUT
+    print(json.dumps(final_results))
 
 
 if __name__ == "__main__":
-    train_main()
+    train_app()
