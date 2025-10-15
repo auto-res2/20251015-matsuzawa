@@ -1,33 +1,32 @@
 run_id: comparative-2-DistilBERT-base-66M-CIFAR-10
 method: comparative-2
 model:
-  name: distilbert-base-uncased
+  name: DistilBERT
+  variant: base
+  num_parameters: 66_000_000
+  pretrained: distilbert-base-uncased
   hidden_size: 768
-  num_layers: 6
-  num_parameters: 66M
-  pretrained: true
+  num_hidden_layers: 6
 dataset:
   name: CIFAR-10
-  representation: patch_sequence
-  patch_size: 4
-  input_size: 32
-  normalization:
-    mean: [0.4914, 0.4822, 0.4465]
-    std: [0.2023, 0.1994, 0.2010]
+  image_to_token_conversion: patchify
+  patch_size: 4  # 4x4 patches -> 64 tokens
+  flatten: true
   train_split: 0.9
   val_split: 0.1
+  batch_size: 16
 training:
-  learning_rate: 0.0001
-  batch_size: 64
-  epochs: 10
+  epochs: 20
+  learning_rate: 1e-4
   optimizer: adamw
   weight_decay: 0.01
   warmup_steps: 500
-  scheduler: linear
-evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
+  gradient_accumulation_steps: 2
+  device: cpu
 optuna:
-  n_trials: 20
+  n_trials: 25
   direction: maximize
+  metric: accuracy
   search_space:
     learning_rate:
       type: loguniform
@@ -35,12 +34,8 @@ optuna:
       high: 1e-3
     batch_size:
       type: categorical
-      choices: [32, 64, 128]
+      choices: [8, 16, 32]
     weight_decay:
-      type: uniform
-      low: 0.0
-      high: 0.1
-    dataset_patch_size:
-      type: int
-      low: 2
-      high: 8
+      type: loguniform
+      low: 1e-4
+      high: 1e-2

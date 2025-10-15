@@ -1,74 +1,61 @@
+"""src/evaluate.py
+Collects all single-run result files and produces comparison plots.
+"""
+from __future__ import annotations
+
 import json
 import os
-import sys
-from glob import glob
 from pathlib import Path
+from typing import Dict, List
 
+import hydra
 import matplotlib.pyplot as plt
-import pandas as pd
-import wandb
+from omegaconf import DictConfig, OmegaConf
 
 
-def _load_results(results_dir):
-    result_files = glob(os.path.join(results_dir, "*/results.json"))
-    data = []
-    for fp in result_files:
-        with open(fp, "r", encoding="utf-8") as f:
-            data.append(json.load(f))
-    return pd.DataFrame(data)
+@hydra.main(version_base=None, config_path="../../config", config_name="config")
+def _main(cfg: DictConfig):
+    results_dir = Path(hydra.utils.get_original_cwd()) / cfg.results_dir
+    run_ids: List[str] = cfg.available_runs
 
+    summaries: Dict[str, Dict] = {}
 
-def _plot(df, save_path):
-    fig, ax = plt.subplots(figsize=(6, 4))
-    for _, row in df.iterrows():
-        ax.scatter(row["model_size_mb"], row["val_accuracy"], label=row["run_id"])
-    ax.set_xlabel("Model size (MB)")
-    ax.set_ylabel("Validation Accuracy")
-    ax.legend(fontsize=6)
-    ax.set_title("Accuracy vs Model Size")
-    fig.tight_layout()
-    fig.savefig(save_path)
-    plt.close(fig)
+    for run_id in run_ids:
+        res_file = results_dir / run_id / "results.json"
+        if not res_file.exists():
+            print(f"Warning – results for {run_id} not found. Skipping.")
+            continue
+        with open(res_file, "r", encoding="utf-8") as fp:
+            summaries[run_id] = json.load(fp)
 
+    # Output comparison table ---------------------------------------------------
+    print("\n===== Aggregate Results =====")
+    for run_id, summary in summaries.items():
+        print(f"{run_id}: {summary['metric_name']} = {summary['best_val_metric']:.4f}")
 
-def evaluate_app(results_dir):
-    results_dir = Path(results_dir)
-    df = _load_results(results_dir)
-    if df.empty:
-        print("No results found in", results_dir)
-        return
-    best_row = df.sort_values("val_accuracy", ascending=False).iloc[0]
-    comparison = {
-        "best_run_id": best_row["run_id"],
-        "best_val_accuracy": best_row["val_accuracy"],
-        "runs": df.to_dict(orient="records"),
-    }
-    # Plot
-    plot_path = results_dir / "accuracy_vs_model_size.png"
-    _plot(df, plot_path)
+    # Bar plot ------------------------------------------------------------------
+    labels = list(summaries.keys())
+    values = [summaries[r]["best_val_metric"] for r in labels]
 
-    # Optionally log to WandB if metadata exists
-    md_path = results_dir / "wandb_metadata.json"
-    if md_path.exists():
-        with open(md_path, "r", encoding="utf-8") as f:
-            md = json.load(f)
-        wandb_run = wandb.init(
-            entity=md["wandb_entity"],
-            project=md["wandb_project"],
-            id=md["wandb_run_id"],
-            resume="allow",
-        )
-        wandb_run.log({"comparison_plot": wandb.Image(str(plot_path))})
-        wandb_run.finish()
+    plt.figure(figsize=(10, 4))
+    plt.barh(labels, values)
+    plt.xlabel("Best validation metric")
+    plt.title("Comparison across runs")
+    plt.tight_layout()
+    fig_path = results_dir / "comparison.png"
+    plt.savefig(fig_path)
 
-    # Print JSON to STDOUT
-    print(json.dumps(comparison))
+    # WandB artifact -------------------------------------------------------------
+    if cfg.wandb.mode in ["online", "offline"]:
+        import wandb
+
+        run = wandb.init(entity="gengaru617", project="251015-test", name="evaluation", mode=cfg.wandb.mode)
+        run.log({"comparison": wandb.Image(str(fig_path))})
+        run.finish()
+
+    # Print final comparison JSON ----------------------------------------------
+    print(json.dumps({"comparison": summaries}))
 
 
 if __name__ == "__main__":
-    # Parse results_dir from command line arguments
-    results_dir = "./results"
-    for arg in sys.argv[1:]:
-        if arg.startswith("results_dir="):
-            results_dir = arg.split("=", 1)[1]
-    evaluate_app(results_dir)
+    _main()

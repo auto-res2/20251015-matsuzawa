@@ -1,204 +1,82 @@
-"""Data loading & preprocessing utilities."""
-import random
-from pathlib import Path
+"""src/preprocess.py
+Dataset & dataloader preparation utilities.
+"""
+from __future__ import annotations
 
-import numpy as np
+import json
+from pathlib import Path
+from typing import Tuple
+
 import torch
-from torch.utils.data import Dataset, DataLoader, random_split
 import torchvision.transforms as T
+from omegaconf import DictConfig
+from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision.datasets import CIFAR10
 
-try:
-    from datasets import load_dataset
-except ImportError:
-    load_dataset = None
-
-# ------------------------------------------------------------
-# Collate helpers
-# ------------------------------------------------------------
-
-def _dict_collate(batch):
-    """Collate a list of dicts by stacking tensors."""
-    output = {}
-    for key in batch[0].keys():
-        data = [b[key] for b in batch]
-        if torch.is_tensor(data[0]):
-            output[key] = torch.stack(data)
-        else:
-            output[key] = torch.tensor(data)
-    return output
+# -----------------------------------------------------------------------------
+# CIFAR-10 helpers
+# -----------------------------------------------------------------------------
 
 
-# ------------------------------------------------------------
-# CIFAR-10 standard classification
-# ------------------------------------------------------------
+def _prepare_cifar(cfg: DictConfig) -> Tuple[DataLoader, DataLoader, int]:
+    mean = cfg.dataset.normalization.mean
+    std = cfg.dataset.normalization.std
 
-def _prepare_cifar_classification_dataloaders(cfg_dataset, trial_mode, batch_size=128, num_workers=2):
-    mean = cfg_dataset.normalization.mean
-    std = cfg_dataset.normalization.std
-    # Transforms
-    train_tfms = []
-    if "random_crop" in cfg_dataset.augmentations:
-        train_tfms.append(T.RandomCrop(cfg_dataset.input_size, padding=4))
-    if "horizontal_flip" in cfg_dataset.augmentations:
-        train_tfms.append(T.RandomHorizontalFlip())
-    train_tfms.extend([T.ToTensor(), T.Normalize(mean, std)])
-    test_tfms = [T.ToTensor(), T.Normalize(mean, std)]
+    transform = T.Compose(
+        [
+            T.Resize(cfg.dataset.image_size),
+            T.ToTensor(),
+            T.Normalize(mean, std),
+        ]
+    )
+    trainset = CIFAR10(root=cfg.dataset.root, train=True, download=True, transform=transform)
 
-    data_root = Path("./data").expanduser()
-    full_trainset = CIFAR10(root=data_root, train=True, download=True, transform=T.Compose(train_tfms))
-
-    # Validation split
-    val_size = int(len(full_trainset) * cfg_dataset.val_split)
-    train_size = len(full_trainset) - val_size
-    train_set, val_set = random_split(full_trainset, [train_size, val_size])
-
-    val_set.dataset.transform = T.Compose(test_tfms)  # override val transforms
-
-    if trial_mode and getattr(cfg_dataset, "subset_size", None):
-        # further subsample for quick tests
-        train_set.indices = train_set.indices[: cfg_dataset.subset_size]
-        val_set.indices = val_set.indices[: int(cfg_dataset.subset_size * cfg_dataset.val_split)]
+    val_ratio = cfg.dataset.val_split
+    val_size = int(len(trainset) * val_ratio)
+    train_size = len(trainset) - val_size
+    train_subset, val_subset = random_split(trainset, [train_size, val_size])
 
     train_loader = DataLoader(
-        train_set,
-        batch_size=batch_size,
+        train_subset,
+        batch_size=cfg.dataset.batch_size,
         shuffle=True,
-        num_workers=num_workers,
+        num_workers=cfg.training.num_workers,
     )
     val_loader = DataLoader(
-        val_set,
-        batch_size=batch_size,
+        val_subset,
+        batch_size=cfg.dataset.batch_size,
         shuffle=False,
-        num_workers=num_workers,
+        num_workers=cfg.training.num_workers,
     )
-    return train_loader, val_loader, 10, None  # num_classes=10, vocab_size=None
+    return train_loader, val_loader, 10
 
 
-# ------------------------------------------------------------
-# CIFAR patch sequence representation for DistilBERT
-# ------------------------------------------------------------
-class CIFARPatchTextDataset(Dataset):
-    def __init__(self, split, cfg_dataset, transform=None):
-        self.base = CIFAR10(root="./data", train=(split == "train"), download=True)
-        self.transform = transform
-        self.cfg = cfg_dataset
-        self.patch_size = cfg_dataset.patch_size
-        self.seq_len = (cfg_dataset.input_size // self.patch_size) ** 2
+# -----------------------------------------------------------------------------
+# Alpaca-cleaned – supervised fine-tuning dataset (binary classification demo)
+# -----------------------------------------------------------------------------
 
-    def _image_to_tokens(self, img):
-        if self.transform:
-            img = self.transform(img)
-        # img is Tensor shape (C,H,W) in 0..1
-        img_np = img.numpy()
-        # convert to grayscale intensity 0-255
-        gray = (0.2989 * img_np[0] + 0.587 * img_np[1] + 0.114 * img_np[2]) * 255.0
-        gray = gray.astype(np.uint8)
-        # patch averaging
-        tokens = []
-        for y in range(0, self.cfg.input_size, self.patch_size):
-            for x in range(0, self.cfg.input_size, self.patch_size):
-                patch = gray[y : y + self.patch_size, x : x + self.patch_size]
-                tokens.append(int(patch.mean()))
-        return tokens  # len = seq_len with values 0-255
+
+class AlpacaClassificationDataset(Dataset):
+    """A very small supervised dataset built from alpaca-cleaned JSON lines.
+
+    Each line is expected to contain::
+        {"text": "...", "label": 0/1}
+    """
+
+    def __init__(self, path: Path, tokenizer, max_length: int):
+        self.samples = []
+        with open(path, "r", encoding="utf-8") as fp:
+            for line in fp:
+                item = json.loads(line)
+                self.samples.append((item["text"], int(item["label"])))
+        self.tokenizer = tokenizer
+        self.max_length = max_length
 
     def __len__(self):
-        return len(self.base)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        img, label = self.base[idx]
-        tokens = self._image_to_tokens(img)
-        attention_mask = [1] * len(tokens)
-        sample = {
-            "input_ids": torch.tensor(tokens, dtype=torch.long),
-            "attention_mask": torch.tensor(attention_mask, dtype=torch.long),
-            "labels": torch.tensor(label, dtype=torch.long),
-        }
-        return sample
-
-
-def _prepare_cifar_patch_text_dataloaders(cfg_dataset, trial_mode, batch_size=128, num_workers=2):
-    mean = cfg_dataset.normalization.mean
-    std = cfg_dataset.normalization.std
-    transform = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
-
-    full_train = CIFARPatchTextDataset("train", cfg_dataset, transform=transform)
-    val_split = cfg_dataset.val_split
-    val_size = int(len(full_train) * val_split)
-    train_size = len(full_train) - val_size
-    train_set, val_set = random_split(full_train, [train_size, val_size])
-
-    if trial_mode and getattr(cfg_dataset, "subset_size", None):
-        train_set.indices = train_set.indices[: cfg_dataset.subset_size]
-        val_set.indices = val_set.indices[: int(cfg_dataset.subset_size * val_split)]
-
-    train_loader = DataLoader(
-        train_set,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=_dict_collate,
-        num_workers=num_workers,
-    )
-    val_loader = DataLoader(
-        val_set,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=_dict_collate,
-        num_workers=num_workers,
-    )
-    num_classes = 10
-    vocab_size = 258  # 0-255 plus PAD and CLS maybe
-    return train_loader, val_loader, num_classes, vocab_size
-
-
-# ------------------------------------------------------------
-# Alpaca instruction-following dataset
-# ------------------------------------------------------------
-class AlpacaTextDataset(Dataset):
-    def __init__(self, split, cfg_dataset):
-        self.cfg = cfg_dataset
-        # Attempt to load real dataset, else fallback
-        if load_dataset is not None:
-            try:
-                ds = load_dataset("yahma/alpaca-cleaned", split="train")
-            except Exception:
-                ds = None
-        else:
-            ds = None
-        if ds is None:
-            # fallback synthetic examples
-            self.data = [
-                {"instruction": "Say hello", "output": "Hello!"},
-                {"instruction": "Say bye", "output": "Bye!"},
-                {"instruction": "Tell a joke", "output": "Why did the chicken cross the road? To get to the other side."},
-            ]
-        else:
-            self.data = ds
-        # train/val split
-        random.seed(42)
-        random.shuffle(self.data)
-        split_idx = int(len(self.data) * cfg_dataset.train_split)
-        if split == "train":
-            self.data = self.data[:split_idx]
-        else:
-            self.data = self.data[split_idx:]
-
-        # Build tokenizer
-        from transformers import DistilBertTokenizerFast
-
-        self.tokenizer = DistilBertTokenizerFast.from_pretrained("distilbert-base-uncased")
-        # Determine max_length
-        self.max_length = cfg_dataset.max_length
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        sample = self.data[idx]
-        text = sample[self.cfg.text_column]
-        label_text = sample[self.cfg.label_column]
-        # quick binary label based on length as placeholder
-        label = 1 if len(label_text) > 100 else 0
+        text, label = self.samples[idx]
         enc = self.tokenizer(
             text,
             padding="max_length",
@@ -206,51 +84,43 @@ class AlpacaTextDataset(Dataset):
             max_length=self.max_length,
             return_tensors="pt",
         )
-        item = {k: v.squeeze(0) for k, v in enc.items()}
-        item["labels"] = torch.tensor(label, dtype=torch.long)
-        return item
+        return enc["input_ids"].squeeze(0), enc["attention_mask"].squeeze(0), torch.tensor(label, dtype=torch.long)
 
 
-def _prepare_alpaca_dataloaders(cfg_dataset, trial_mode, batch_size=128, num_workers=2):
-    train_ds = AlpacaTextDataset("train", cfg_dataset)
-    val_ds = AlpacaTextDataset("val", cfg_dataset)
+# -----------------------------------------------------------------------------
+# DataLoader builder dispatcher
+# -----------------------------------------------------------------------------
 
-    if trial_mode and getattr(cfg_dataset, "subset_size", None):
-        train_ds.data = train_ds.data[: cfg_dataset.subset_size]
-        val_ds.data = val_ds.data[: int(cfg_dataset.subset_size * cfg_dataset.val_split)]
+def build_dataloaders(cfg: DictConfig):
+    if cfg.dataset.name.lower() == "cifar-10":
+        train_loader, val_loader, num_classes = _prepare_cifar(cfg)
+        task_type = "classification"
+        return train_loader, val_loader, task_type, num_classes
 
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        collate_fn=_dict_collate,
-        num_workers=num_workers,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=batch_size,
-        shuffle=False,
-        collate_fn=_dict_collate,
-        num_workers=num_workers,
-    )
-    num_classes = 2
-    vocab_size = train_ds.tokenizer.vocab_size
-    return train_loader, val_loader, num_classes, vocab_size
+    elif cfg.dataset.name.lower() == "alpaca-cleaned":
+        from transformers import AutoTokenizer
 
+        data_path = Path(cfg.dataset.get("path", "./data/alpaca-cleaned.json"))
+        tokenizer = AutoTokenizer.from_pretrained(cfg.dataset.tokenizer)
+        full_dataset = AlpacaClassificationDataset(
+            path=data_path, tokenizer=tokenizer, max_length=cfg.dataset.max_seq_length
+        )
+        val_size = int(len(full_dataset) * cfg.dataset.val_split)
+        train_size = len(full_dataset) - val_size
+        train_ds, val_ds = random_split(full_dataset, [train_size, val_size])
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=cfg.dataset.batch_size,
+            shuffle=True,
+            num_workers=cfg.training.num_workers,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=cfg.dataset.batch_size,
+            shuffle=False,
+            num_workers=cfg.training.num_workers,
+        )
+        return train_loader, val_loader, "classification", 2
 
-# ------------------------------------------------------------
-# Public API
-# ------------------------------------------------------------
-
-def get_dataloaders(cfg, trial_mode=False):
-    batch_size = cfg.training.batch_size
-    num_workers = cfg.training.get("num_workers", 2)
-    
-    if cfg.dataset.name == "CIFAR-10" and cfg.dataset.get("representation", None) == "patch_sequence":
-        return _prepare_cifar_patch_text_dataloaders(cfg.dataset, trial_mode, batch_size, num_workers)
-    elif cfg.dataset.name == "CIFAR-10":
-        return _prepare_cifar_classification_dataloaders(cfg.dataset, trial_mode, batch_size, num_workers)
-    elif cfg.dataset.name == "alpaca-cleaned":
-        return _prepare_alpaca_dataloaders(cfg.dataset, trial_mode, batch_size, num_workers)
     else:
-        raise ValueError(f"Unsupported dataset: {cfg.dataset.name}")
+        raise ValueError(f"Unsupported dataset {cfg.dataset.name}")

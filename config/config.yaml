@@ -1,17 +1,15 @@
 defaults:
-  - _self_
-  - optional run: ???
+  - run: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
 
+# List all available experiment run identifiers
+available_runs:
+  - comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
+  - comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned
+  - comparative-2-DistilBERT-base-66M-CIFAR-10
+  - comparative-2-DistilBERT-base-66M-alpaca-cleaned
+
+# Global defaults – can be overridden via CLI
 results_dir: ./results
 trial_mode: false
-
-evaluate: true
-
 wandb:
-  mode: online
-  project: null
-  entity: null
-
-hydra:
-  run:
-    dir: .
+  mode: disabled

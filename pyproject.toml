@@ -1,25 +1,19 @@
-[project]
-name = "efficient-model-comparison"
-version = "0.1.0"
-description = "Lightweight architecture comparison experiments"
-requires-python = ">=3.9"
-dependencies = [
-    "torch",
-    "torchvision",
-    "hydra-core",
-    "omegaconf",
-    "wandb",
-    "optuna",
-    "transformers",
-    "datasets",
-    "scikit-learn",
-    "matplotlib",
-    "pandas",
-]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
-
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "comparative2_experiments"
+version = "0.0.1"
+dependencies = [
+    "torch>=2.0",
+    "torchvision>=0.15",
+    "hydra-core>=1.3",
+    "optuna>=3.3",
+    "wandb>=0.15",
+    "omegaconf>=2.3",
+    "transformers>=4.34",
+    "scikit-learn>=1.3",
+    "matplotlib>=3.8",
+    "pillow>=10.0",
+]
