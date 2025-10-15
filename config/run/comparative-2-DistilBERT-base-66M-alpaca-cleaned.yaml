@@ -1,37 +1,34 @@
 run_id: comparative-2-DistilBERT-base-66M-alpaca-cleaned
 method: comparative-2
-seed: 42
+task: text_classification
 model:
-  name: distilbert-base
-  num_parameters: 66M
+  name: distilbert-base-uncased
   pretrained: true
-  num_classes: 2  # will be inferred from dataset labels
+  num_parameters: 66e6
+  fine_tune_layers: "all"
+  dropout: 0.1
 dataset:
   name: alpaca-cleaned
-  task: text_classification
-  tokenizer: bert-base-uncased
-  max_length: 512
-  pad_to_max_length: true
-  batch_size: 16
-  split_ratio:
-    train: 0.8
-    val: 0.1
-    test: 0.1
+  max_length: 256
+  text_field: instruction
+  label_field: output
+  train_val_split: [0.9, 0.1]
+  batch_size: 8
 training:
-  epochs: 3
-  learning_rate: 3e-5
   optimizer: adamw
+  learning_rate: 5e-5
   weight_decay: 0.01
-  scheduler:
-    type: linear
+  epochs: 3
+  lr_scheduler:
+    name: linear
     warmup_steps: 500
-resources:
+  gradient_checkpointing: true
+  seed: 42
   device: cpu
-  num_workers: 2
-evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
+evaluation:
+  metrics: [accuracy, f1_score, inference_time, model_size]
 optuna:
   n_trials: 20
-  direction: maximize
   search_space:
     learning_rate:
       type: loguniform
@@ -39,8 +36,12 @@ optuna:
       high: 1e-4
     batch_size:
       type: categorical
-      choices: [8, 16, 32]
+      choices: [4, 8, 16]
     weight_decay:
       type: uniform
       low: 0.0
-      high: 0.05
+      high: 0.1
+    dropout:
+      type: uniform
+      low: 0.05
+      high: 0.3

@@ -1,70 +1,87 @@
 import json
-import sys
+import os
 from pathlib import Path
-from typing import Dict, List
+from typing import List, Dict
 
+import hydra
 import matplotlib.pyplot as plt
-import pandas as pd
+from omegaconf import OmegaConf
 
 
-def load_results(results_dir: Path) -> List[Dict]:
-    results = []
-    for p in results_dir.glob("*/results.json"):
-        with p.open() as f:
-            obj = json.load(f)
-            final = obj["final_metrics"]
-            final["run_id"] = p.parent.name
-            results.append(final)
-    return results
+class NoOpWandB:
+    def __init__(self):
+        self.enabled = False
+
+    def init(self, *args, **kwargs):
+        pass
+
+    def log(self, *args, **kwargs):
+        pass
+
+    def save(self, *args, **kwargs):
+        pass
+
+    def finish(self):
+        pass
 
 
-def main(results_dir: str):
-    results_path = Path(results_dir)
-    records = load_results(results_path)
-    if not records:
-        print("No result files found", file=sys.stderr)
-        sys.exit(1)
+def maybe_init_wandb(cfg):
+    if cfg.wandb.mode == "disabled":
+        return NoOpWandB()
+    import wandb
 
-    df = pd.DataFrame(records).set_index("run_id")
-    # Plot accuracy comparison
-    ax = df["test_accuracy"].plot(kind="bar", figsize=(10, 4), ylabel="Test Accuracy")
-    fig = ax.get_figure()
+    run = wandb.init(
+        project=cfg.wandb.project,
+        entity=cfg.wandb.entity,
+        name=f"evaluation-{cfg.results_dir}",
+        mode=cfg.wandb.mode,
+    )
+    run.enabled = True
+    return run
+
+
+def read_results(dir_path: Path) -> Dict:
+    with (dir_path / "results.json").open() as fp:
+        return json.load(fp)
+
+
+def aggregate_results(results_dirs: List[Path]):
+    records = [read_results(p) for p in results_dirs]
+    return records
+
+
+def plot_accuracy(records: List[Dict], out_path: Path):
+    names = [r["run_id"] for r in records]
+    accs = [r["best_val_accuracy"] for r in records]
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.bar(names, accs)
+    ax.set_ylabel("Validation Accuracy")
+    ax.set_xticklabels(names, rotation=45, ha="right")
     fig.tight_layout()
-    fig_path = results_path / "accuracy_comparison.png"
-    fig.savefig(fig_path)
+    fig.savefig(out_path)
+    plt.close(fig)
 
-    summary = {
-        "best_run": df["test_accuracy"].idxmax(),
-        "best_accuracy": df["test_accuracy"].max(),
-        "all_runs": records,
-    }
 
-    # Print JSON summary
+@hydra.main(config_path="../config", config_name="config")
+def main(cfg) -> None:
+    results_root = Path(cfg.results_dir)
+    sub_dirs = [p for p in results_root.iterdir() if p.is_dir()]
+    records = aggregate_results(sub_dirs)
+
+    # Print aggregated numbers --------------------------------------------------
+    summary = {r["run_id"]: r["best_val_accuracy"] for r in records}
     print(json.dumps(summary, indent=2))
 
-    # WandB artifact upload if metadata exists
-    meta_file = results_path / summary["best_run"] / "wandb_metadata.json"
-    if meta_file.exists():
-        try:
-            import wandb
-            with meta_file.open() as f:
-                meta = json.load(f)
-            run = wandb.init(
-                project=meta["wandb_project"],
-                entity=meta["wandb_entity"],
-                id=meta["wandb_run_id"],
-                resume="allow",
-                reinit=True,
-                mode="online",
-            )
-            run.log({"accuracy_comparison": wandb.Image(str(fig_path))})
-            run.finish()
-        except Exception as e:
-            print(f"wandb upload failed: {e}")
+    # Plot & (optionally) upload to WandB ---------------------------------------
+    fig_path = results_root / "comparison.png"
+    plot_accuracy(records, fig_path)
+
+    wb = maybe_init_wandb(cfg)
+    if getattr(wb, "enabled", False):
+        wb.log({"validation_accuracy_comparison": wandb.Image(str(fig_path))})  # type: ignore
+        wb.save(str(fig_path))  # type: ignore
+        wb.finish()  # type: ignore
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python -m src.evaluate <results_dir>")
-        sys.exit(1)
-    main(sys.argv[1])
+    main()
