@@ -1,61 +1,70 @@
-"""src/evaluate.py
-Collects all single-run result files and produces comparison plots.
-"""
-from __future__ import annotations
-
 import json
-import os
+import sys
 from pathlib import Path
 from typing import Dict, List
 
-import hydra
 import matplotlib.pyplot as plt
-from omegaconf import DictConfig, OmegaConf
+import pandas as pd
 
 
-@hydra.main(version_base=None, config_path="../../config", config_name="config")
-def _main(cfg: DictConfig):
-    results_dir = Path(hydra.utils.get_original_cwd()) / cfg.results_dir
-    run_ids: List[str] = cfg.available_runs
+def load_results(results_dir: Path) -> List[Dict]:
+    results = []
+    for p in results_dir.glob("*/results.json"):
+        with p.open() as f:
+            obj = json.load(f)
+            final = obj["final_metrics"]
+            final["run_id"] = p.parent.name
+            results.append(final)
+    return results
 
-    summaries: Dict[str, Dict] = {}
 
-    for run_id in run_ids:
-        res_file = results_dir / run_id / "results.json"
-        if not res_file.exists():
-            print(f"Warning – results for {run_id} not found. Skipping.")
-            continue
-        with open(res_file, "r", encoding="utf-8") as fp:
-            summaries[run_id] = json.load(fp)
+def main(results_dir: str):
+    results_path = Path(results_dir)
+    records = load_results(results_path)
+    if not records:
+        print("No result files found", file=sys.stderr)
+        sys.exit(1)
 
-    # Output comparison table ---------------------------------------------------
-    print("\n===== Aggregate Results =====")
-    for run_id, summary in summaries.items():
-        print(f"{run_id}: {summary['metric_name']} = {summary['best_val_metric']:.4f}")
+    df = pd.DataFrame(records).set_index("run_id")
+    # Plot accuracy comparison
+    ax = df["test_accuracy"].plot(kind="bar", figsize=(10, 4), ylabel="Test Accuracy")
+    fig = ax.get_figure()
+    fig.tight_layout()
+    fig_path = results_path / "accuracy_comparison.png"
+    fig.savefig(fig_path)
 
-    # Bar plot ------------------------------------------------------------------
-    labels = list(summaries.keys())
-    values = [summaries[r]["best_val_metric"] for r in labels]
+    summary = {
+        "best_run": df["test_accuracy"].idxmax(),
+        "best_accuracy": df["test_accuracy"].max(),
+        "all_runs": records,
+    }
 
-    plt.figure(figsize=(10, 4))
-    plt.barh(labels, values)
-    plt.xlabel("Best validation metric")
-    plt.title("Comparison across runs")
-    plt.tight_layout()
-    fig_path = results_dir / "comparison.png"
-    plt.savefig(fig_path)
+    # Print JSON summary
+    print(json.dumps(summary, indent=2))
 
-    # WandB artifact -------------------------------------------------------------
-    if cfg.wandb.mode in ["online", "offline"]:
-        import wandb
-
-        run = wandb.init(entity="gengaru617", project="251015-test", name="evaluation", mode=cfg.wandb.mode)
-        run.log({"comparison": wandb.Image(str(fig_path))})
-        run.finish()
-
-    # Print final comparison JSON ----------------------------------------------
-    print(json.dumps({"comparison": summaries}))
+    # WandB artifact upload if metadata exists
+    meta_file = results_path / summary["best_run"] / "wandb_metadata.json"
+    if meta_file.exists():
+        try:
+            import wandb
+            with meta_file.open() as f:
+                meta = json.load(f)
+            run = wandb.init(
+                project=meta["wandb_project"],
+                entity=meta["wandb_entity"],
+                id=meta["wandb_run_id"],
+                resume="allow",
+                reinit=True,
+                mode="online",
+            )
+            run.log({"accuracy_comparison": wandb.Image(str(fig_path))})
+            run.finish()
+        except Exception as e:
+            print(f"wandb upload failed: {e}")
 
 
 if __name__ == "__main__":
-    _main()
+    if len(sys.argv) != 2:
+        print("Usage: python -m src.evaluate <results_dir>")
+        sys.exit(1)
+    main(sys.argv[1])
