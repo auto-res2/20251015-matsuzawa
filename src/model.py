@@ -189,7 +189,7 @@ def model_num_parameters(model: nn.Module) -> int:
     return sum(p.numel() for p in model.parameters())
 
 
-def build_model(model_cfg: DictConfig) -> nn.Module:  # noqa: C901
+def build_model(model_cfg: DictConfig, full_cfg: DictConfig = None) -> nn.Module:  # noqa: C901
     name = model_cfg.name.lower()
     if name == "mobilenetv2":
         arch = getattr(model_cfg, "architecture", "").lower()
@@ -209,7 +209,8 @@ def build_model(model_cfg: DictConfig) -> nn.Module:  # noqa: C901
     if name == "distilbert":
         # Distinguish between image and text variant using attribute presence
         if hasattr(model_cfg, "image_patch_size"):
-            return ImageTransformer(model_cfg._get_root())
+            cfg_to_use = full_cfg if full_cfg is not None else model_cfg._get_root()
+            return ImageTransformer(cfg_to_use)
         else:
             # Text DistilBERT fine-tuning using transformers
             from transformers import DistilBertForSequenceClassification, DistilBertConfig  # type: ignore

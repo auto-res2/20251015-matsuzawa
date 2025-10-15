@@ -9,7 +9,7 @@ model:
 
 dataset:
   name: alpaca-cleaned
-  path: /datasets/alpaca-cleaned
+  path: ./datasets/alpaca-cleaned
   max_length: 512
   tokenizer: bert-base-uncased
   split:

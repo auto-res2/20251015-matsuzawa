@@ -160,7 +160,7 @@ def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
     # ---------------------------------------------------------------------
     # Model
     # ---------------------------------------------------------------------
-    model = build_model(run_cfg.model)
+    model = build_model(run_cfg.model, run_cfg)
     num_params = model_num_parameters(model)
     model.to(device)
 
