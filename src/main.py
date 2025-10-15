@@ -9,7 +9,7 @@ from hydra.utils import to_absolute_path
 from omegaconf import OmegaConf, DictConfig
 
 
-@hydra.main(config_path="../config", config_name="config")
+@hydra.main(config_path="../config", config_name="config", version_base=None)
 def main(cfg: DictConfig):
     results_root = Path(to_absolute_path(cfg.results_dir))
     results_root.mkdir(parents=True, exist_ok=True)
@@ -21,7 +21,7 @@ def main(cfg: DictConfig):
             "-u",
             "-m",
             "src.train",
-            f"run={run_id}",
+            f"--config-name={run_id}",
             f"results_dir={run_results_dir}",
             f"trial_mode={cfg.trial_mode}",
             f"wandb.mode={cfg.wandb.mode}",
@@ -31,10 +31,11 @@ def main(cfg: DictConfig):
 
     # Determine which runs to execute------------------------------------------------
     run_list: List[str]
-    if cfg.run == "all":
+    run_param = cfg.get("run", "all")
+    if run_param == "all":
         run_list = cfg.run_list
     else:
-        run_list = [cfg.run]
+        run_list = [run_param]
     for r in run_list:
         _run_single(r)
 

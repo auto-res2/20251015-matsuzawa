@@ -54,15 +54,16 @@ def plot_accuracy(records: List[Dict], out_path: Path):
     names = [r["run_id"] for r in records]
     accs = [r["best_val_accuracy"] for r in records]
     fig, ax = plt.subplots(figsize=(8, 4))
-    ax.bar(names, accs)
+    bars = ax.bar(range(len(names)), accs)
     ax.set_ylabel("Validation Accuracy")
+    ax.set_xticks(range(len(names)))
     ax.set_xticklabels(names, rotation=45, ha="right")
     fig.tight_layout()
     fig.savefig(out_path)
     plt.close(fig)
 
 
-@hydra.main(config_path="../config", config_name="config")
+@hydra.main(config_path="../config", config_name="config", version_base=None)
 def main(cfg) -> None:
     results_root = Path(cfg.results_dir)
     sub_dirs = [p for p in results_root.iterdir() if p.is_dir()]

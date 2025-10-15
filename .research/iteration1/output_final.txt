@@ -1,0 +1,104 @@
+warning: No `requires-python` value found in the workspace. Defaulting to `>=3.11`.
+Executing:  /home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/.venv/bin/python3 -u -m src.train --config-name=comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10 results_dir=/home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/.research/iteration1/comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10 trial_mode=True wandb.mode=disabled
+################################################################################
+Experiment description:
+run_id: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
+method: comparative-2
+task: image_classification
+results_dir: /home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/.research/iteration1/comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
+trial_mode: true
+wandb:
+  entity: gengaru617
+  project: 251015-test
+  mode: disabled
+model:
+  name: mobilenet_v2
+  width_multiplier: 0.5
+  pretrained: false
+  num_parameters: 3500000.0
+dataset:
+  name: CIFAR-10
+  image_size: 32
+  augmentation:
+    random_crop: true
+    horizontal_flip: true
+  normalization:
+    mean:
+    - 0.4914
+    - 0.4822
+    - 0.4465
+    std:
+    - 0.247
+    - 0.2435
+    - 0.2616
+  train_val_split:
+  - 0.9
+  - 0.1
+  batch_size: 128
+training:
+  optimizer: sgd
+  learning_rate: 0.01
+  momentum: 0.9
+  weight_decay: 0.0001
+  epochs: 1
+  lr_scheduler:
+    name: cosine_annealing
+    T_max: 100
+  seed: 42
+  device: cpu
+evaluation:
+  metrics:
+  - accuracy
+  - inference_time
+  - model_size
+optuna:
+  n_trials: 0
+  search_space:
+    learning_rate:
+      type: loguniform
+      low: 0.0001
+      high: 0.1
+    batch_size:
+      type: categorical
+      choices:
+      - 32
+      - 64
+      - 128
+    weight_decay:
+      type: loguniform
+      low: 1.0e-06
+      high: 0.001
+
+################################################################################
+Experimental results:
+{
+  "run_id": "comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10",
+  "best_val_accuracy": 0.312,
+  "epochs_ran": 1,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 2.0978770613776314,
+      "train_acc": 0.2088888888888889,
+      "val_loss": 1.8643188583374024,
+      "val_acc": 0.312,
+      "val_inference_time": 0.00026958189010620117
+    }
+  ],
+  "model_parameters": 697258
+}
+{"run_id": "comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10", "best_val_metric": 0.312}
+Executing evaluation:  /home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/.venv/bin/python3 -u -m src.evaluate results_dir=/home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/.research/iteration1 wandb.mode=disabled
+/home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/src/evaluate.py:65: UserWarning: 
+The version_base parameter is not specified.
+Please specify a compatability version level, or None.
+Will assume defaults for version 1.1
+  @hydra.main(config_path="../config", config_name="config")
+/home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/.venv/lib/python3.11/site-packages/hydra/_internal/hydra.py:119: UserWarning: Future Hydra versions will no longer change working directory at job runtime by default.
+See https://hydra.cc/docs/1.2/upgrades/1.1_to_1.2/changes_to_job_working_dir/ for more information.
+  ret = run_job(
+{
+  "comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10": 0.312
+}
+/home/toma/pt80-1-a-25/_work/20251015-matsuzawa/20251015-matsuzawa/src/evaluate.py:59: UserWarning: set_ticklabels() should only be used with a fixed number of ticks, i.e. after set_ticks() or using a FixedLocator.
+  ax.set_xticklabels(names, rotation=45, ha="right")

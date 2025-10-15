@@ -9,7 +9,7 @@
       "train_acc": 0.2088888888888889,
       "val_loss": 1.8643188583374024,
       "val_acc": 0.312,
-      "val_inference_time": 0.0002904928207397461
+      "val_inference_time": 0.0003082866191864014
     }
   ],
   "model_parameters": 697258

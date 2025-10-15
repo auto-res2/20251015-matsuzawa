@@ -273,7 +273,7 @@ def run_single_training(cfg, trial=None) -> float:
 # -----------------------------------------------------------------------------
 # Entry point driven by Hydra
 # -----------------------------------------------------------------------------
-@hydra.main(config_path="../config", config_name="config")
+@hydra.main(config_path="../config/experiment", version_base=None)
 def main(cfg) -> None:
     cfg.results_dir = to_absolute_path(cfg.results_dir)
     Path(cfg.results_dir).mkdir(parents=True, exist_ok=True)
