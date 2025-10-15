@@ -1,11 +1,16 @@
 defaults:
   - _self_
+  - optional run: ???
 
-run: null  # will be overridden from CLI
 results_dir: ./results
 trial_mode: false
 
 evaluate: true
+
+wandb:
+  mode: online
+  project: null
+  entity: null
 
 hydra:
   run:

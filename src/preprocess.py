@@ -33,7 +33,7 @@ def _dict_collate(batch):
 # CIFAR-10 standard classification
 # ------------------------------------------------------------
 
-def _prepare_cifar_classification_dataloaders(cfg_dataset, trial_mode):
+def _prepare_cifar_classification_dataloaders(cfg_dataset, trial_mode, batch_size=128, num_workers=2):
     mean = cfg_dataset.normalization.mean
     std = cfg_dataset.normalization.std
     # Transforms
@@ -62,15 +62,15 @@ def _prepare_cifar_classification_dataloaders(cfg_dataset, trial_mode):
 
     train_loader = DataLoader(
         train_set,
-        batch_size=cfg_dataset.batch_size,
+        batch_size=batch_size,
         shuffle=True,
-        num_workers=cfg_dataset.num_workers,
+        num_workers=num_workers,
     )
     val_loader = DataLoader(
         val_set,
-        batch_size=cfg_dataset.batch_size,
+        batch_size=batch_size,
         shuffle=False,
-        num_workers=cfg_dataset.num_workers,
+        num_workers=num_workers,
     )
     return train_loader, val_loader, 10, None  # num_classes=10, vocab_size=None
 
@@ -117,7 +117,7 @@ class CIFARPatchTextDataset(Dataset):
         return sample
 
 
-def _prepare_cifar_patch_text_dataloaders(cfg_dataset, trial_mode):
+def _prepare_cifar_patch_text_dataloaders(cfg_dataset, trial_mode, batch_size=128, num_workers=2):
     mean = cfg_dataset.normalization.mean
     std = cfg_dataset.normalization.std
     transform = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
@@ -134,17 +134,17 @@ def _prepare_cifar_patch_text_dataloaders(cfg_dataset, trial_mode):
 
     train_loader = DataLoader(
         train_set,
-        batch_size=cfg_dataset.batch_size,
+        batch_size=batch_size,
         shuffle=True,
         collate_fn=_dict_collate,
-        num_workers=cfg_dataset.num_workers,
+        num_workers=num_workers,
     )
     val_loader = DataLoader(
         val_set,
-        batch_size=cfg_dataset.batch_size,
+        batch_size=batch_size,
         shuffle=False,
         collate_fn=_dict_collate,
-        num_workers=cfg_dataset.num_workers,
+        num_workers=num_workers,
     )
     num_classes = 10
     vocab_size = 258  # 0-255 plus PAD and CLS maybe
@@ -211,7 +211,7 @@ class AlpacaTextDataset(Dataset):
         return item
 
 
-def _prepare_alpaca_dataloaders(cfg_dataset, trial_mode):
+def _prepare_alpaca_dataloaders(cfg_dataset, trial_mode, batch_size=128, num_workers=2):
     train_ds = AlpacaTextDataset("train", cfg_dataset)
     val_ds = AlpacaTextDataset("val", cfg_dataset)
 
@@ -221,17 +221,17 @@ def _prepare_alpaca_dataloaders(cfg_dataset, trial_mode):
 
     train_loader = DataLoader(
         train_ds,
-        batch_size=cfg_dataset.batch_size,
+        batch_size=batch_size,
         shuffle=True,
         collate_fn=_dict_collate,
-        num_workers=2,
+        num_workers=num_workers,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=cfg_dataset.batch_size,
+        batch_size=batch_size,
         shuffle=False,
         collate_fn=_dict_collate,
-        num_workers=2,
+        num_workers=num_workers,
     )
     num_classes = 2
     vocab_size = train_ds.tokenizer.vocab_size
@@ -243,11 +243,14 @@ def _prepare_alpaca_dataloaders(cfg_dataset, trial_mode):
 # ------------------------------------------------------------
 
 def get_dataloaders(cfg, trial_mode=False):
+    batch_size = cfg.training.batch_size
+    num_workers = cfg.training.get("num_workers", 2)
+    
     if cfg.dataset.name == "CIFAR-10" and cfg.dataset.get("representation", None) == "patch_sequence":
-        return _prepare_cifar_patch_text_dataloaders(cfg.dataset, trial_mode)
+        return _prepare_cifar_patch_text_dataloaders(cfg.dataset, trial_mode, batch_size, num_workers)
     elif cfg.dataset.name == "CIFAR-10":
-        return _prepare_cifar_classification_dataloaders(cfg.dataset, trial_mode)
+        return _prepare_cifar_classification_dataloaders(cfg.dataset, trial_mode, batch_size, num_workers)
     elif cfg.dataset.name == "alpaca-cleaned":
-        return _prepare_alpaca_dataloaders(cfg.dataset, trial_mode)
+        return _prepare_alpaca_dataloaders(cfg.dataset, trial_mode, batch_size, num_workers)
     else:
         raise ValueError(f"Unsupported dataset: {cfg.dataset.name}")

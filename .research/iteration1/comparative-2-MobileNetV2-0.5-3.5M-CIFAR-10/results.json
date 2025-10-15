@@ -1,0 +1,22 @@
+{
+  "run_id": "comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10",
+  "method": "comparative-2",
+  "model_name": "MobileNetV2",
+  "dataset": "CIFAR-10",
+  "val_accuracy": 0.06,
+  "val_f1": 0.011320754716981133,
+  "inference_time_sec": 0.006238460540771484,
+  "model_size_mb": 2.6722,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 2.4230973930358886,
+      "train_accuracy": 0.09,
+      "train_f1": 0.07730691661565596,
+      "val_loss": 2.3164186477661133,
+      "val_accuracy": 0.06,
+      "val_f1": 0.011320754716981133,
+      "epoch_time_sec": 1.3639655113220215
+    }
+  ]
+}

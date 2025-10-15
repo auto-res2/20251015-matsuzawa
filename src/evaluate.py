@@ -1,12 +1,11 @@
 import json
 import os
+import sys
 from glob import glob
 from pathlib import Path
 
-import hydra
 import matplotlib.pyplot as plt
 import pandas as pd
-from omegaconf import OmegaConf
 import wandb
 
 
@@ -32,9 +31,8 @@ def _plot(df, save_path):
     plt.close(fig)
 
 
-@hydra.main(config_path="../config", config_name="config", version_base=None)
-def evaluate_app(cfg):
-    results_dir = Path(cfg.results_dir)
+def evaluate_app(results_dir):
+    results_dir = Path(results_dir)
     df = _load_results(results_dir)
     if df.empty:
         print("No results found in", results_dir)
@@ -68,4 +66,9 @@ def evaluate_app(cfg):
 
 
 if __name__ == "__main__":
-    evaluate_app()
+    # Parse results_dir from command line arguments
+    results_dir = "./results"
+    for arg in sys.argv[1:]:
+        if arg.startswith("results_dir="):
+            results_dir = arg.split("=", 1)[1]
+    evaluate_app(results_dir)

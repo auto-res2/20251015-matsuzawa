@@ -160,13 +160,14 @@ def _run_training(cfg, results_dir, device, log_to_wandb=True):
 
     # WandB
     wandb_run = None
-    if log_to_wandb:
+    if log_to_wandb and cfg.wandb.mode != "disabled":
         wandb_run = wandb.init(
             entity=cfg.wandb.entity,
             project=cfg.wandb.project,
             name=cfg.wandb.get("run_name", cfg.run_id),
             tags=list(cfg.wandb.get("tags", [])),
             config=OmegaConf.to_container(cfg, resolve=True),
+            mode=cfg.wandb.mode,
             reinit=True,
         )
         # Save metadata immediately
@@ -266,11 +267,14 @@ def _run_training(cfg, results_dir, device, log_to_wandb=True):
 @hydra.main(config_path="../config", config_name="config", version_base=None)
 def train_app(cfg):
     """Hydra entry-point for a single training run."""
-    # Load specific run configuration
-    run_cfg_path = to_absolute_path(os.path.join("config", "run", f"{cfg.run}.yaml"))
-    if not os.path.exists(run_cfg_path):
-        raise FileNotFoundError(f"Run config not found: {run_cfg_path}")
-    run_cfg = OmegaConf.merge(cfg, OmegaConf.load(run_cfg_path))
+    # The run config is loaded under cfg.run by Hydra
+    # Merge it with the top-level config
+    OmegaConf.set_struct(cfg.run, False)
+    run_cfg = OmegaConf.merge(cfg.run, OmegaConf.create({
+        "results_dir": cfg.results_dir,
+        "trial_mode": cfg.trial_mode,
+        "wandb": cfg.wandb
+    }))
 
     # Apply trial_mode overrides
     if cfg.trial_mode:

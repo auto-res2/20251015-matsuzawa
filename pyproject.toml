@@ -1,23 +1,25 @@
-[tool.poetry]
+[project]
 name = "efficient-model-comparison"
 version = "0.1.0"
 description = "Lightweight architecture comparison experiments"
-authors = ["AI Researcher <researcher@example.com>"]
+requires-python = ">=3.9"
+dependencies = [
+    "torch",
+    "torchvision",
+    "hydra-core",
+    "omegaconf",
+    "wandb",
+    "optuna",
+    "transformers",
+    "datasets",
+    "scikit-learn",
+    "matplotlib",
+    "pandas",
+]
 
-[tool.poetry.dependencies]
-python = "^3.9"
-torch = "*"
-torchvision = "*"
-hydra-core = "*"
-omegaconf = "*"
-wandb = "*"
-optuna = "*"
-transformers = "*"
-datasets = "*"
-scikit-learn = "*"
-matplotlib = "*"
-pandas = "*"
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

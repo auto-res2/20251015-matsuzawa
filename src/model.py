@@ -23,7 +23,9 @@ def compute_model_size(model):
 # ------------------------------------------------------------
 
 def _build_mobilenet(cfg_model, num_classes):
-    net = tv_models.mobilenet_v2(pretrained=cfg_model.pretrained, width_mult=cfg_model.width_multiplier)
+    # Pretrained weights only available for width_mult=1.0
+    use_pretrained = cfg_model.pretrained and cfg_model.width_multiplier == 1.0
+    net = tv_models.mobilenet_v2(pretrained=use_pretrained, width_mult=cfg_model.width_multiplier)
     in_feats = net.classifier[1].in_features
     net.classifier[1] = nn.Linear(in_feats, num_classes)
     return net
