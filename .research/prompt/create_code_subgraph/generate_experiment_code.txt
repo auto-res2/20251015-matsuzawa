@@ -1,0 +1,359 @@
+
+Input:
+You are a cutting-edge AI researcher generating complete, executable code for research paper experiments with Hydra configuration management.
+
+Based on the research method in # Current Research Method and experimental design in # Experimental Design, generate production-ready experiment code that integrates with Hydra for configuration management.
+
+# Instructions: Complete Experiment Code Generation
+
+## Core Requirements
+- COMPLETE IMPLEMENTATION: Every component must be fully functional, production-ready, publication-worthy code. No "omitted for brevity", no "simplified version", no TODO, PLACEHOLDER, pass, or ...
+- PYTORCH EXCLUSIVELY: Use PyTorch as the deep learning framework
+- HYDRA INTEGRATION: Use Hydra to manage all experiment configurations from `config/run/*.yaml` files
+- COMPLETE DATA PIPELINE: Full data loading and preprocessing implementation
+
+## Hydra Configuration Structure
+Each run config file (`config/run/{run_id}.yaml`) contains:
+- run_id: Unique identifier for this run
+- method: The method name (baseline, proposed, ablation, etc.)
+- model: Model-specific parameters (name, architecture details, hyperparameters)
+- dataset: Dataset-specific parameters (name, preprocessing settings, split ratios)
+- training: Training hyperparameters (learning rate, batch size, epochs, optimizer settings, validation split)
+- optuna: Hyperparameter search space definition for Optuna optimization
+
+## Standard Output Content Requirements
+- Experiment description: Before printing experimental results, the standard output must include a detailed description of the experiment.
+- Experimental numerical data: All experimental data obtained in the experiments must be output to the standard output.
+
+## Command Line Interface
+The generated code must support the following CLI:
+- Full Experiment: Runs the experiment using the exact parameters from the configuration files.
+```bash
+uv run python -u -m src.main run={run_id} results_dir={path}
+```
+- Trial Mode: For quick validation, a trial_mode=true flag must be supported. When enabled, the code should override configurations for a minimal run (e.g., set training.epochs=1 and disable Optuna by setting optuna.n_trials=0). This flag defaults to false.
+```bash
+uv run python -u -m src.main run={run_id} results_dir={path} trial_mode=true
+```
+
+The `run` argument specifies which experiment to run (matching a run_id from config/run/*.yaml).
+The `results_dir` argument is passed from the GitHub Actions workflow and specifies where all outputs should be saved.
+
+## Output Structure
+Generate complete code for these files ONLY. Do not create any additional files beyond this structure:
+
+### Script Structure (ExperimentCode format)
+- `src/train.py`: Logic to run a single experiment variation. Uses Hydra config to load parameters. It is called as a subprocess by main.py. It must save final metrics to a structured file (e.g., results.json).
+- `src/evaluate.py`: Comparison and visualization tool. It reads the result files from all experiment variations and generates comparison figures.
+- `src/preprocess.py`: Complete preprocessing pipeline implementation for the specified datasets
+- `src/model.py`: Complete model architecture implementations. It will contain classes for baseline, proposed, and ablation models. Implement all architectures from scratch.
+- `src/main.py`: The main orchestrator script. It receives a run_id via Hydra, launches train.py for that specific experiment, manages subprocess, collects and consolidates logs, and finally triggers evaluate.py if needed.
+- `pyproject.toml`: Complete project dependencies (include hydra-core, optuna if needed)
+- `config/config.yaml`: Main Hydra configuration file that defines the list of all experiment run_ids
+
+
+### Key Implementation Focus Areas
+1. Hydra-Driven Configuration: All parameters loaded from run configs dynamically
+2. Algorithm Core: Full implementation of the proposed method with proper abstraction
+3. Sequential Execution: main.py executes run variations one at a time in sequential order
+4. Configuration Driven: The entire workflow must be driven by the YAML configuration files
+5. Evaluation Consistency: Identical metrics calculation, result formatting, and comparison logic. evaluate.py must operate on the saved results after all training is complete
+6. Structured Logging:
+   - train.py: Print JSON-formatted experimental data (epoch-wise metrics, final results) to stdout using `print(json.dumps({...}))`. Always include `"run_id"` field (use the run variation name from config).
+   - evaluate.py: Print JSON-formatted comparison results to stdout
+   - main.py: For each subprocess, redirect stdout/stderr to `{results_dir}/{run_id}/stdout.log` and `{results_dir}/{run_id}/stderr.log` while also forwarding to main process stdout/stderr (using tee-like logic) so logs are captured both structurally and by GitHub Actions.
+
+
+## Code Validation Feedback
+
+
+
+
+# Experimental Environment
+cpu
+RAM：500 MB
+
+# Current Research Method (Target for Experiment Design)
+We compare lightweight model architectures (MobileNetV2-0.5 and DistilBERT-base) across vision and language tasks to evaluate their efficiency and performance trade-offs.
+
+# Experimental Design
+- Strategy: 
+
+# Experiment Runs
+
+- Run ID: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
+  Method: comparative-2
+  Model: MobileNetV2-0.5-3.5M
+  Dataset: CIFAR-10
+  Config File: config/run/comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10.yaml
+  
+  Config Content:
+  ```yaml
+  run_id: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
+method: comparative-2
+model:
+  name: MobileNetV2
+  variant: 0.5
+  num_parameters: 3.5M
+  pretrained: imagenet
+  width_multiplier: 0.5
+  dropout: 0.2
+dataset:
+  name: CIFAR-10
+  input_size: 32
+  normalization: standard
+  augmentations:
+    random_horizontal_flip: true
+    random_crop: true
+  batch_size: 64
+training:
+  learning_rate: 0.001
+  epochs: 50
+  optimizer: adam
+  weight_decay: 0.0001
+  scheduler: cosine
+  early_stopping_patience: 10
+optuna:
+  n_trials: 20
+  direction: maximize
+  metric: accuracy
+  search_space:
+    learning_rate:
+      type: loguniform
+      low: 1e-4
+      high: 1e-2
+    batch_size:
+      type: categorical
+      choices: [32, 64, 128]
+    weight_decay:
+      type: uniform
+      low: 0.0
+      high: 0.01
+
+  ```
+  
+
+- Run ID: comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned
+  Method: comparative-2
+  Model: MobileNetV2-0.5-3.5M
+  Dataset: alpaca-cleaned
+  Config File: config/run/comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned.yaml
+  
+  Config Content:
+  ```yaml
+  run_id: comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned
+method: comparative-2
+model:
+  name: MobileNetV2
+  variant: 0.5
+  num_parameters: 3.5M
+  pretrained: imagenet
+  width_multiplier: 0.5
+  dropout: 0.2
+dataset:
+  name: alpaca-cleaned
+  text_column: instruction
+  label_column: output
+  tokenizer: spacy
+  max_length: 512
+  padding: longest
+  batch_size: 16
+training:
+  learning_rate: 0.0005
+  epochs: 2
+  optimizer: adamw
+  weight_decay: 0.01
+  scheduler: linear
+  gradient_accumulation_steps: 2
+  early_stopping_patience: 3
+optuna:
+  n_trials: 20
+  direction: maximize
+  metric: f1_score
+  search_space:
+    learning_rate:
+      type: loguniform
+      low: 1e-5
+      high: 1e-3
+    batch_size:
+      type: categorical
+      choices: [8, 16, 32]
+    weight_decay:
+      type: uniform
+      low: 0.0
+      high: 0.02
+
+  ```
+  
+
+- Run ID: comparative-2-DistilBERT-base-66M-CIFAR-10
+  Method: comparative-2
+  Model: DistilBERT-base-66M
+  Dataset: CIFAR-10
+  Config File: config/run/comparative-2-DistilBERT-base-66M-CIFAR-10.yaml
+  
+  Config Content:
+  ```yaml
+  run_id: comparative-2-DistilBERT-base-66M-CIFAR-10
+method: comparative-2
+model:
+  name: distilbert-base-uncased
+  num_layers: 6
+  hidden_size: 768
+  attention_heads: 12
+  num_parameters: 66M
+  dropout: 0.1
+dataset:
+  name: CIFAR-10
+  input_size: 32
+  preprocessing:
+    flatten: true
+    normalize: true
+  batch_size: 32
+training:
+  learning_rate: 5e-5
+  epochs: 10
+  optimizer: adamw
+  weight_decay: 0.01
+  scheduler: linear
+  early_stopping_patience: 5
+optuna:
+  n_trials: 20
+  direction: maximize
+  metric: accuracy
+  search_space:
+    learning_rate:
+      type: loguniform
+      low: 1e-6
+      high: 1e-4
+    batch_size:
+      type: categorical
+      choices: [16, 32, 64]
+    weight_decay:
+      type: uniform
+      low: 0.0
+      high: 0.02
+
+  ```
+  
+
+- Run ID: comparative-2-DistilBERT-base-66M-alpaca-cleaned
+  Method: comparative-2
+  Model: DistilBERT-base-66M
+  Dataset: alpaca-cleaned
+  Config File: config/run/comparative-2-DistilBERT-base-66M-alpaca-cleaned.yaml
+  
+  Config Content:
+  ```yaml
+  run_id: comparative-2-DistilBERT-base-66M-alpaca-cleaned
+method: comparative-2
+model:
+  name: distilbert-base-uncased
+  num_layers: 6
+  hidden_size: 768
+  attention_heads: 12
+  num_parameters: 66M
+  dropout: 0.1
+dataset:
+  name: alpaca-cleaned
+  text_column: instruction
+  label_column: output
+  tokenizer: bert-base-uncased
+  max_length: 512
+  padding: longest
+  batch_size: 16
+training:
+  learning_rate: 5e-5
+  epochs: 3
+  optimizer: adamw
+  weight_decay: 0.01
+  scheduler: linear
+  warmup_steps: 500
+  gradient_accumulation_steps: 2
+  early_stopping_patience: 3
+optuna:
+  n_trials: 20
+  direction: maximize
+  metric: f1_score
+  search_space:
+    learning_rate:
+      type: loguniform
+      low: 1e-6
+      high: 1e-4
+    batch_size:
+      type: categorical
+      choices: [8, 16, 32]
+    weight_decay:
+      type: uniform
+      low: 0.0
+      high: 0.02
+
+  ```
+  
+
+
+# External Resources (Use these for implementation)
+
+
+
+# ========================================
+# WandB Integration Requirements
+# ========================================
+
+## Overview
+In addition to the common requirements above, integrate WandB (Weights & Biases) for experiment tracking and visualization.
+
+## Additional Requirements
+- WANDB INTEGRATION: Initialize WandB with proper project/entity from config, log metrics/artifacts, and save wandb_run_id to metadata
+- WANDB METADATA: Save WandB run information to `.research/iteration{experiment_iteration}/wandb_metadata.json` with structure:
+  ```json
+  {
+    "wandb_entity": "gengaru617",
+    "wandb_project": "251015-test",
+    "wandb_run_id": "<actual_run_id_from_wandb>"
+  }
+  ```
+- Initialization: Initialize WandB at the start of each training run with config from Hydra
+- Metric Logging: Log all training/validation metrics to WandB (loss, accuracy, etc.)
+- Artifact Tracking: Log model checkpoints and important artifacts
+- Metadata Saving: After WandB initialization, save the wandb_run_id to `.research/iteration{experiment_iteration}/wandb_metadata.json`
+- Configuration Logging: Log all hyperparameters and config to WandB
+- Figure Upload: Upload figures as WandB artifacts instead of (or in addition to) saving locally
+
+## WandB Configuration
+- Entity: gengaru617
+- Project: 251015-test
+
+## Environment Variables
+- `WANDB_API_KEY`: Available as a GitHub Actions secret for WandB authentication
+
+## Modified Output Requirements
+- WandB run URL: Print the WandB run URL to stdout for easy access to detailed logs
+- Figures: Upload figures as WandB artifacts (local saving is optional)
+
+## Modified Config Structure
+Each run config file should also include:
+- wandb: WandB configuration (entity, project, run_name, tags)
+
+## Modified Dependencies
+- pyproject.toml: Include `wandb` package
+
+## WandB Metadata File Location
+The wandb_metadata.json file must be saved to:
+- Path: `.research/iteration{experiment_iteration}/wandb_metadata.json`
+- The experiment_iteration should be passed as an environment variable or config parameter
+- The file should be created immediately after WandB run initialization in train.py
+
+
+
+Generate complete, production-ready experiment code that integrates with Hydra configuration system.
+Output:
+{
+    "train_py": "import os\nimport json\nimport sys\nimport time\nimport shutil\nimport pathlib\nfrom typing import Dict, Any\n\nimport torch\nimport torch.nn as nn\nimport torch.optim as optim\nfrom torch.utils.data import DataLoader\n\nfrom hydra import compose, initialize\nfrom omegaconf import OmegaConf, DictConfig\n\nimport wandb\nimport optuna\nfrom sklearn.metrics import accuracy_score, f1_score\n\n# local modules\nfrom .preprocess import get_dataloaders, set_random_seed\nfrom .model import build_model\n\n\ndef _metric_name(cfg: DictConfig):\n    return cfg.optuna.metric if cfg.get(\"optuna\") else (\n        \"accuracy\" if cfg.dataset.name.lower().startswith(\"cifar\") else \"f1_score\"\n    )\n\n\ndef objective(trial: optuna.trial.Trial, cfg: DictConfig):\n    # Suggest hyperparameters based on search_space\n    suggested = {}\n    for name, space in cfg.optuna.search_space.items():\n        if space.type == \"loguniform\":\n            suggested[name] = trial.suggest_float(name, space.low, space.high, log=True)\n        elif space.type == \"uniform\":\n            suggested[name] = trial.suggest_float(name, space.low, space.high)\n        elif space.type == \"categorical\":\n            suggested[name] = trial.suggest_categorical(name, space.choices)\n        else:\n            raise ValueError(f\"Unsupported space type {space.type}\")\n\n    # Override cfg with suggested values\n    cfg = OmegaConf.merge(cfg, {\"training\": suggested})\n    val_metric, _ = run_training(cfg, trial_number=trial.number)\n    return val_metric\n\n\ndef run_training(cfg: DictConfig, trial_number: int = None):\n    device = torch.device(\"cuda\" if torch.cuda.is_available() else \"cpu\")\n\n    train_loader, val_loader, test_loader, num_classes = get_dataloaders(cfg)\n    model, tokenizer = build_model(cfg, num_classes)\n    model.to(device)\n\n    criterion = nn.CrossEntropyLoss()\n\n    opt_name = cfg.training.optimizer.lower()\n    if opt_name == \"adam\":\n        optimizer = optim.Adam(model.parameters(), lr=cfg.training.learning_rate, weight_decay=cfg.training.weight_decay)\n    elif opt_name == \"adamw\":\n        optimizer = optim.AdamW(model.parameters(), lr=cfg.training.learning_rate, weight_decay=cfg.training.weight_decay)\n    else:\n        raise ValueError(f\"Unsupported optimizer {cfg.training.optimizer}\")\n\n    if cfg.training.scheduler == \"cosine\":\n        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, cfg.training.epochs)\n    elif cfg.training.scheduler == \"linear\":\n        scheduler = optim.lr_scheduler.LinearLR(optimizer)\n    else:\n        scheduler = None\n\n    best_val_metric = -1.0\n    best_state_dict = None\n    patience_counter = 0\n    history = []\n\n    # === training loop ===\n    for epoch in range(cfg.training.epochs):\n        model.train()\n        epoch_loss = 0.0\n        y_true, y_pred = [], []\n        for batch in train_loader:\n            inputs, labels = batch\n            inputs, labels = inputs.to(device), labels.to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, labels)\n            loss.backward()\n            optimizer.step()\n\n            epoch_loss += loss.item() * labels.size(0)\n            preds = outputs.argmax(dim=1)\n            y_true.extend(labels.cpu().tolist())\n            y_pred.extend(preds.cpu().tolist())\n\n        train_metric = accuracy_score(y_true, y_pred) if cfg.dataset.name.lower().startswith(\"cifar\") else f1_score(y_true, y_pred, average=\"macro\")\n\n        # === validation ===\n        model.eval()\n        with torch.no_grad():\n            y_true, y_pred, val_loss_total = [], [], 0.0\n            for batch in val_loader:\n                inputs, labels = batch\n                inputs, labels = inputs.to(device), labels.to(device)\n                outputs = model(inputs)\n                loss = criterion(outputs, labels)\n                val_loss_total += loss.item() * labels.size(0)\n                preds = outputs.argmax(dim=1)\n                y_true.extend(labels.cpu().tolist())\n                y_pred.extend(preds.cpu().tolist())\n            val_metric = accuracy_score(y_true, y_pred) if cfg.dataset.name.lower().startswith(\"cifar\") else f1_score(y_true, y_pred, average=\"macro\")\n\n        # scheduler step\n        if scheduler is not None:\n            scheduler.step()\n\n        history.append({\n            \"epoch\": epoch + 1,\n            \"train_loss\": epoch_loss / len(train_loader.dataset),\n            \"train_metric\": train_metric,\n            \"val_metric\": val_metric,\n        })\n\n        # wandb logging\n        wandb.log(history[-1])\n\n        # early stopping check\n        if val_metric > best_val_metric:\n            best_val_metric = val_metric\n            best_state_dict = model.state_dict()\n            patience_counter = 0\n        else:\n            patience_counter += 1\n\n        if patience_counter >= cfg.training.early_stopping_patience:\n            break\n\n    # === test evaluation ===\n    model.load_state_dict(best_state_dict)\n    model.eval()\n    with torch.no_grad():\n        y_true, y_pred = [], []\n        for batch in test_loader:\n            inputs, labels = batch\n            inputs, labels = inputs.to(device), labels.to(device)\n            outputs = model(inputs)\n            preds = outputs.argmax(dim=1)\n            y_true.extend(labels.cpu().tolist())\n            y_pred.extend(preds.cpu().tolist())\n    test_metric = accuracy_score(y_true, y_pred) if cfg.dataset.name.lower().startswith(\"cifar\") else f1_score(y_true, y_pred, average=\"macro\")\n\n    return best_val_metric, {\"test_metric\": test_metric, \"history\": history, \"best_val_metric\": best_val_metric}\n\n\ndef save_wandb_metadata(cfg: DictConfig, run_id: str):\n    iteration = os.getenv(\"EXPERIMENT_ITERATION\", \"0\")\n    path = pathlib.Path(f\".research/iteration{iteration}\")\n    path.mkdir(parents=True, exist_ok=True)\n    meta_path = path / \"wandb_metadata.json\"\n    json.dump({\n        \"wandb_entity\": cfg.wandb.entity,\n        \"wandb_project\": cfg.wandb.project,\n        \"wandb_run_id\": run_id,\n    }, open(meta_path, \"w\"))\n\n\ndef train_entry(cfg: DictConfig):\n    # Apply trial mode overrides\n    if cfg.trial_mode:\n        cfg.training.epochs = 1\n        cfg.optuna.n_trials = 0\n\n    set_random_seed(42)\n\n    # results dir handling\n    run_dir = pathlib.Path(cfg.results_dir) / cfg.run_id\n    run_dir.mkdir(parents=True, exist_ok=True)\n\n    # init wandb\n    wandb.login(key=os.getenv(\"WANDB_API_KEY\"))\n    wandb_cfg = cfg.get(\"wandb\", {})\n    wandb_run = wandb.init(\n        entity=wandb_cfg.get(\"entity\", \"gengaru617\"),\n        project=wandb_cfg.get(\"project\", \"251015-test\"),\n        name=wandb_cfg.get(\"run_name\", cfg.run_id),\n        tags=wandb_cfg.get(\"tags\", []) + [cfg.method],\n        config=OmegaConf.to_container(cfg, resolve=True),\n        reinit=True,\n    )\n    print(f\"WandB URL: {wandb_run.url}\")\n    save_wandb_metadata(cfg, wandb_run.id)\n\n    # === Optuna Hyperparameter Search ===\n    if cfg.optuna.n_trials > 0:\n        study = optuna.create_study(direction=cfg.optuna.direction)\n        study.optimize(lambda t: objective(t, cfg), n_trials=cfg.optuna.n_trials)\n        best_params = study.best_params\n        # merge best params into cfg for final training\n        cfg = OmegaConf.merge(cfg, {\"training\": best_params})\n        best_val_metric, result_data = run_training(cfg)\n        result_data[\"best_params\"] = best_params\n    else:\n        best_val_metric, result_data = run_training(cfg)\n\n    # save artifacts\n    results_json_path = run_dir / \"results.json\"\n    with open(results_json_path, \"w\") as f:\n        json.dump({\n            \"run_id\": cfg.run_id,\n            **result_data,\n        }, f, indent=2)\n\n    # finish wandb\n    wandb.save(str(results_json_path))\n    wandb.finish()\n\n    # print final result to stdout (for structured logging)\n    print(json.dumps({\n        \"run_id\": cfg.run_id,\n        \"best_val_metric\": result_data[\"best_val_metric\"],\n        \"test_metric\": result_data[\"test_metric\"],\n    }))\n\n\n# ----------------------------- Hydra wrapper -----------------------------\n\ndef main():\n    with initialize(config_path=\"../config\", job_name=\"train\"):  # relative to this file (src/train.py)\n        cfg = compose(config_name=\"config\", overrides=sys.argv[1:])\n        cfg = OmegaConf.to_container(cfg, resolve=True)\n        cfg = OmegaConf.create(cfg)\n        train_entry(cfg)\n\n\nif __name__ == \"__main__\":\n    main()",
+    "evaluate_py": "import json\nimport os\nimport sys\nimport pathlib\nfrom typing import List, Dict\nimport matplotlib.pyplot as plt\nimport wandb\n\nfrom sklearn.metrics import accuracy_score, f1_score\n\n\ndef load_results(result_files: List[pathlib.Path]):\n    all_results = []\n    for file in result_files:\n        with open(file) as f:\n            all_results.append(json.load(f))\n    return all_results\n\n\ndef aggregate_and_plot(results: List[Dict], results_dir: pathlib.Path):\n    # Determine metric type (accuracy/f1) from first result\n    metric_name = \"test_metric\"\n    labels = [r[\"run_id\"] for r in results]\n    values = [r[metric_name] for r in results]\n\n    plt.figure(figsize=(10, 4))\n    plt.bar(labels, values)\n    plt.ylabel(metric_name)\n    plt.xticks(rotation=45, ha=\"right\")\n    plt.tight_layout()\n    fig_path = results_dir / \"aggregate_metrics.png\"\n    plt.savefig(fig_path)\n    plt.close()\n\n    return {\"labels\": labels, \"values\": values, \"metric\": metric_name, \"figure\": str(fig_path)}\n\n\ndef evaluate(results_dir: str):\n    results_dir = pathlib.Path(results_dir)\n    result_files = list(results_dir.glob(\"*/results.json\"))\n    if not result_files:\n        print(\"No result files found. Skipping evaluation.\")\n        return\n\n    results = load_results(result_files)\n    summary = aggregate_and_plot(results, results_dir)\n\n    # upload figure to WandB if logged in\n    if wandb.run is not None:\n        wandb.log({\"aggregate_metrics\": wandb.Image(summary[\"figure\"])})\n\n    print(json.dumps({\"evaluation\": summary}))\n\n\nif __name__ == \"__main__\":\n    evaluate(sys.argv[1])",
+    "preprocess_py": "import random\nimport pathlib\nfrom typing import Tuple, Any, List\n\nimport torch\nfrom torch.utils.data import DataLoader, random_split, Dataset\nfrom torchvision import datasets, transforms\n\nfrom datasets import load_dataset\nfrom sklearn.preprocessing import LabelEncoder\nfrom transformers import BertTokenizerFast\n\n\n# ---------------------- Utilities ----------------------\n\ndef set_random_seed(seed: int):\n    random.seed(seed)\n    torch.manual_seed(seed)\n    torch.cuda.manual_seed_all(seed)\n    torch.backends.cudnn.deterministic = True\n    torch.backends.cudnn.benchmark = False\n\n\n# ---------------------- CIFAR10 ----------------------\n\ndef _cifar_dataloaders(cfg):\n    transform_train = []\n    if cfg.dataset.augmentations.random_crop:\n        transform_train.append(transforms.RandomCrop(cfg.dataset.input_size, padding=4))\n    if cfg.dataset.augmentations.random_horizontal_flip:\n        transform_train.append(transforms.RandomHorizontalFlip())\n    transform_train.extend([\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ])\n\n    transform_test = [\n        transforms.ToTensor(),\n        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),\n    ]\n\n    train_dataset = datasets.CIFAR10(root=\"./data\", train=True, download=True, transform=transforms.Compose(transform_train))\n    test_dataset = datasets.CIFAR10(root=\"./data\", train=False, download=True, transform=transforms.Compose(transform_test))\n\n    # validation split\n    val_ratio = 0.1\n    val_len = int(len(train_dataset) * val_ratio)\n    train_len = len(train_dataset) - val_len\n    train_subset, val_subset = random_split(train_dataset, [train_len, val_len])\n\n    def _maybe_flatten(batch):\n        x, y = batch\n        if getattr(cfg.dataset.preprocessing, \"flatten\", False):\n            x = x.view(x.size(0), -1)\n        return x, y\n\n    if getattr(cfg.dataset, \"preprocessing\", None) and cfg.dataset.preprocessing.get(\"flatten\", False):\n        collate_fn = lambda batch: tuple(zip(*[ _maybe_flatten((b[0], b[1])) for b in batch]))\n    else:\n        collate_fn = None\n\n    train_loader = DataLoader(train_subset, batch_size=cfg.dataset.batch_size, shuffle=True, num_workers=2, collate_fn=collate_fn)\n    val_loader = DataLoader(val_subset, batch_size=cfg.dataset.batch_size, shuffle=False, num_workers=2, collate_fn=collate_fn)\n    test_loader = DataLoader(test_dataset, batch_size=cfg.dataset.batch_size, shuffle=False, num_workers=2, collate_fn=collate_fn)\n\n    return train_loader, val_loader, test_loader, 10\n\n\n# ---------------------- Alpaca Text ----------------------\n\nclass AlpacaDataset(Dataset):\n    def __init__(self, hf_ds, tokenizer, text_col: str, label_encoder: LabelEncoder, max_length: int):\n        self.ds = hf_ds\n        self.tokenizer = tokenizer\n        self.text_col = text_col\n        self.le = label_encoder\n        self.max_length = max_length\n\n    def __len__(self):\n        return len(self.ds)\n\n    def __getitem__(self, idx):\n        text = self.ds[idx][self.text_col]\n        label_text = self.ds[idx][\"output\"]\n        label = self.le.transform([label_text])[0]\n        tokens = self.tokenizer(\n            text,\n            max_length=self.max_length,\n            padding=\"max_length\",\n            truncation=True,\n            return_tensors=\"pt\",\n        )\n        # return token ids tensor (squeezed) and label\n        return tokens[\"input_ids\"].squeeze(0), label\n\n\ndef _alpaca_dataloaders(cfg):\n    ds = load_dataset(\"yahma/alpaca-cleaned\", split=\"train\")\n\n    # simple label encoding by hashing output texts (not ideal but functional)\n    label_encoder = LabelEncoder()\n    label_encoder.fit(ds[cfg.dataset.label_column])\n\n    if cfg.dataset.tokenizer == \"spacy\":\n        # fallback to whitespace tokenizer\n        tokenizer = lambda x, max_length, padding, truncation, return_tensors: {\n            \"input_ids\": torch.tensor([hash(w) % 30522 for w in x.split()][:max_length] + [0]*(max_length - len(x.split())[:max_length]) ).unsqueeze(0)\n        }\n    else:\n        tokenizer = BertTokenizerFast.from_pretrained(cfg.dataset.tokenizer)\n\n    full_dataset = AlpacaDataset(ds, tokenizer, cfg.dataset.text_column, label_encoder, cfg.dataset.max_length)\n\n    val_ratio = 0.1\n    val_len = int(len(full_dataset) * val_ratio)\n    train_len = len(full_dataset) - val_len\n    train_subset, val_subset = random_split(full_dataset, [train_len, val_len])\n\n    test_subset = val_subset  # placeholder since dataset has no official test split\n\n    train_loader = DataLoader(train_subset, batch_size=cfg.dataset.batch_size, shuffle=True, num_workers=2)\n    val_loader = DataLoader(val_subset, batch_size=cfg.dataset.batch_size, shuffle=False, num_workers=2)\n    test_loader = DataLoader(test_subset, batch_size=cfg.dataset.batch_size, shuffle=False, num_workers=2)\n\n    num_classes = len(label_encoder.classes_)\n    return train_loader, val_loader, test_loader, num_classes\n\n\n# ---------------------- Dispatcher ----------------------\n\ndef get_dataloaders(cfg):\n    if cfg.dataset.name.lower() == \"cifar-10\":\n        return _cifar_dataloaders(cfg)\n    elif cfg.dataset.name.lower() == \"alpaca-cleaned\":\n        return _alpaca_dataloaders(cfg)\n    else:\n        raise ValueError(f\"Unsupported dataset {cfg.dataset.name}\")",
+    "model_py": "import math\nimport torch\nimport torch.nn as nn\nfrom torchvision.models import mobilenet_v2\n\n# --------------------- MobileNetV2 ---------------------\n\nclass MobileNetV2Classifier(nn.Module):\n    def __init__(self, num_classes: int, width_mult: float = 1.0, dropout: float = 0.2, pretrained: bool = True):\n        super().__init__()\n        self.backbone = mobilenet_v2(pretrained=pretrained, width_mult=width_mult)\n        in_features = self.backbone.classifier[1].in_features\n        self.backbone.classifier = nn.Sequential(\n            nn.Dropout(p=dropout),\n            nn.Linear(in_features, num_classes),\n        )\n\n    def forward(self, x):\n        return self.backbone(x)\n\n\n# --------------------- DistilTransformer ---------------------\n\nclass TransformerEncoderBlock(nn.Module):\n    def __init__(self, hidden_size: int, num_heads: int, dropout: float):\n        super().__init__()\n        self.attn = nn.MultiheadAttention(hidden_size, num_heads, dropout=dropout, batch_first=True)\n        self.ff = nn.Sequential(\n            nn.Linear(hidden_size, hidden_size * 4),\n            nn.GELU(),\n            nn.Dropout(dropout),\n            nn.Linear(hidden_size * 4, hidden_size),\n            nn.Dropout(dropout),\n        )\n        self.norm1 = nn.LayerNorm(hidden_size)\n        self.norm2 = nn.LayerNorm(hidden_size)\n\n    def forward(self, x):\n        h = self.attn(x, x, x)[0]\n        x = self.norm1(x + h)\n        h2 = self.ff(x)\n        x = self.norm2(x + h2)\n        return x\n\n\nclass DistilTransformer(nn.Module):\n    def __init__(self, vocab_size: int, num_layers: int, hidden_size: int, num_heads: int, num_classes: int, max_length: int = 512, dropout: float = 0.1):\n        super().__init__()\n        self.token_emb = nn.Embedding(vocab_size, hidden_size)\n        self.pos_emb = nn.Embedding(max_length, hidden_size)\n        self.layers = nn.ModuleList([\n            TransformerEncoderBlock(hidden_size, num_heads, dropout) for _ in range(num_layers)\n        ])\n        self.norm = nn.LayerNorm(hidden_size)\n        self.classifier = nn.Linear(hidden_size, num_classes)\n        self.max_length = max_length\n\n    def forward(self, input_ids):\n        # input_ids: (batch, seq_len)\n        seq_len = input_ids.size(1)\n        position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0).expand_as(input_ids)\n        x = self.token_emb(input_ids) + self.pos_emb(position_ids)\n        for layer in self.layers:\n            x = layer(x)\n        x = self.norm(x)\n        pooled = x[:, 0]  # use first token representation\n        logits = self.classifier(pooled)\n        return logits\n\n\n# --------------------- Factory ---------------------\n\ndef build_model(cfg, num_classes):\n    name = cfg.model.name.lower()\n    tokenizer = None\n    if name.startswith(\"mobilenetv2\") or name == \"mobilenetv2\":\n        model = MobileNetV2Classifier(\n            num_classes=num_classes,\n            width_mult=cfg.model.width_multiplier,\n            dropout=cfg.model.dropout,\n            pretrained=cfg.model.pretrained == \"imagenet\",\n        )\n    elif name.startswith(\"distilbert\") or name == \"distilbert-base-uncased\":\n        vocab_size = 30522  # standard BERT vocab\n        model = DistilTransformer(\n            vocab_size=vocab_size,\n            num_layers=cfg.model.num_layers,\n            hidden_size=cfg.model.hidden_size,\n            num_heads=cfg.model.attention_heads,\n            num_classes=num_classes,\n            dropout=cfg.model.dropout,\n        )\n    else:\n        raise ValueError(f\"Unsupported model {cfg.model.name}\")\n    return model, tokenizer",
+    "main_py": "import subprocess\nimport sys\nimport os\nimport pathlib\nimport threading\nfrom hydra import compose, initialize\nfrom omegaconf import OmegaConf\n\n\ndef tee_stream(stream, log_file):\n    for line in iter(stream.readline, b\"\"):\n        sys.stdout.buffer.write(line)\n        log_file.buffer.write(line)\n    stream.close()\n\n\ndef run_subprocess(args, run_dir):\n    stdout_path = run_dir / \"stdout.log\"\n    stderr_path = run_dir / \"stderr.log\"\n    with open(stdout_path, \"wb\") as stdout_file, open(stderr_path, \"wb\") as stderr_file:\n        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)\n        threads = [\n            threading.Thread(target=tee_stream, args=(proc.stdout, stdout_file), daemon=True),\n            threading.Thread(target=tee_stream, args=(proc.stderr, stderr_file), daemon=True),\n        ]\n        for t in threads:\n            t.start()\n        proc.wait()\n        for t in threads:\n            t.join()\n        return proc.returncode\n\n\ndef orchestrate(cfg):\n    run_dir = pathlib.Path(cfg.results_dir) / cfg.run_id\n    run_dir.mkdir(parents=True, exist_ok=True)\n\n    args = [\n        sys.executable,\n        \"-u\",\n        \"-m\",\n        \"src.train\",\n        f\"run={cfg.run_id}\",\n        f\"results_dir={cfg.results_dir}\",\n        f\"trial_mode={str(cfg.trial_mode).lower()}\",\n    ]\n\n    ret = run_subprocess(args, run_dir)\n    if ret != 0:\n        raise RuntimeError(f\"Training subprocess exited with {ret}\")\n\n    # After training, trigger evaluation across all results in results_dir\n    eval_args = [\n        sys.executable,\n        \"-u\",\n        \"-m\",\n        \"src.evaluate\",\n        f\"{cfg.results_dir}\",\n    ]\n    subprocess.check_call(eval_args)\n\n\ndef main():\n    with initialize(config_path=\"../config\", job_name=\"main\"):\n        cfg = compose(config_name=\"config\", overrides=sys.argv[1:])\n        cfg = OmegaConf.to_container(cfg, resolve=True)\n        cfg = OmegaConf.create(cfg)\n        orchestrate(cfg)\n\n\nif __name__ == \"__main__\":\n    main()",
+    "pyproject_toml": "[build-system]\nrequires = [\"setuptools\", \"wheel\"]\nbuild-backend = \"setuptools.build_meta\"\n\n[project]\nname = \"research_experiments\"\nversion = \"0.1.0\"\ndependencies = [\n    \"torch>=1.13.0\",\n    \"torchvision>=0.14.0\",\n    \"hydra-core>=1.3.2\",\n    \"optuna>=3.4.0\",\n    \"wandb>=0.15.0\",\n    \"datasets>=2.14.0\",\n    \"transformers>=4.32.0\",\n    \"scikit-learn>=1.3.0\",\n    \"matplotlib>=3.7.0\",\n    \"spacy>=3.5.0\",\n]",
+    "config_yaml": "defaults:\n  - _self_\n  - ? run  # optional run config, must be supplied from command line\n\n# Global overrides\ntrial_mode: false\nresults_dir: \"./results\"\n\nwandb:\n  entity: \"gengaru617\"\n  project: \"251015-test\"\n\n# Placeholder for dynamic fields to avoid Hydra complaints\nrun_id: null\nmethod: null\nmodel: {}\ndataset: {}\ntraining: {}\noptuna: {}\n\n# Note: individual experiment hyperparameters are defined under config/run/*.yaml and selected via run={run_id}\n"
+}
