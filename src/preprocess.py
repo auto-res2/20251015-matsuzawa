@@ -1,218 +1,125 @@
-import os
-import random
+"""Data preprocessing & DataLoader utilities."""
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple
+import json
+import random
 
 import torch
+from torch.utils.data import DataLoader, Dataset, random_split
 import torchvision.transforms as T
-from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import CIFAR10
+from omegaconf import DictConfig
 
+# ----------------------------------------------------------------------------
+# Text dataset utilities
+# ----------------------------------------------------------------------------
 
-# -----------------------------------------------------------------------------
-# Synthetic fallback datasets (used when remote download fails)
-# -----------------------------------------------------------------------------
+class AlpacaCharDataset(Dataset):
+    """Character-level dataset for Alpaca-cleaned."""
 
-
-class SyntheticImageDataset(Dataset):
-    def __init__(self, num_samples: int = 1000, num_classes: int = 10, image_size: int = 32):
-        self.num_samples = num_samples
-        self.num_classes = num_classes
-        self.image_size = image_size
-        self.data = torch.randn(num_samples, 3, image_size, image_size)
-        self.labels = torch.randint(0, num_classes, (num_samples,))
-
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx]
-
-
-class SyntheticTextDataset(Dataset):
-    def __init__(
-        self,
-        num_samples: int = 1000,
-        seq_len: int = 32,
-        vocab_size: int = 5000,
-        num_classes: int = 2,
-    ):
-        self.num_samples = num_samples
-        self.seq_len = seq_len
-        self.vocab_size = vocab_size
-        self.num_classes = num_classes
-        self.data = torch.randint(1, vocab_size, (num_samples, seq_len))
-        self.labels = torch.randint(0, num_classes, (num_samples,))
+    def __init__(self, file_path: Path, seq_length: int, char2idx: dict):
+        self.samples = []
+        with file_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                text, label = obj["text"], obj["label"]
+                self.samples.append((text.lower(), int(label)))
+        self.seq_length = seq_length
+        self.char2idx = char2idx
+        self.pad_idx = self.char2idx["<pad>"]
 
     def __len__(self):
-        return self.num_samples
+        return len(self.samples)
+
+    def _encode(self, text: str):
+        encoded = [self.char2idx.get(ch, self.char2idx["<unk>"]) for ch in text]
+        encoded = encoded[: self.seq_length]
+        if len(encoded) < self.seq_length:
+            encoded += [self.pad_idx] * (self.seq_length - len(encoded))
+        return torch.tensor(encoded, dtype=torch.long)
 
     def __getitem__(self, idx):
-        return self.data[idx], self.labels[idx]
+        text, label = self.samples[idx]
+        return self._encode(text), torch.tensor(label, dtype=torch.long)
 
 
-# -----------------------------------------------------------------------------
-# Text tokeniser & vocabulary builder (simple whitespace split)
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Build DataLoaders
+# ----------------------------------------------------------------------------
+
+def build_dataloaders(cfg: DictConfig):
+    if cfg.dataset.name.lower() == "cifar-10":
+        return _build_cifar10(cfg)
+    if cfg.dataset.name.lower() == "alpaca-cleaned":
+        return _build_alpaca(cfg)
+    raise ValueError(f"Unsupported dataset {cfg.dataset.name}")
 
 
-def build_vocab(corpus: List[str], max_size: int = 30000):
-    from collections import Counter
+def _build_cifar10(cfg: DictConfig):
+    # Transforms
+    normalize = T.Normalize(mean=cfg.dataset.normalization.mean, std=cfg.dataset.normalization.std)
+    train_tfms = [
+        T.RandomCrop(cfg.dataset.augmentation.random_crop.size, padding=cfg.dataset.augmentation.random_crop.padding),
+        T.RandomHorizontalFlip(cfg.dataset.augmentation.random_horizontal_flip.p),
+        T.ToTensor(),
+        normalize,
+    ]
+    val_tfms = [T.ToTensor(), normalize]
 
-    counter = Counter()
-    for line in corpus:
-        counter.update(line.split())
-    most_common = counter.most_common(max_size - 2)  # reserve PAD & UNK
-    vocab = {w: i + 2 for i, (w, _) in enumerate(most_common)}
-    vocab["<PAD>"] = 0
-    vocab["<UNK>"] = 1
-    return vocab
+    # Datasets (download if needed)
+    path = Path(cfg.dataset.path)
+    train_set = CIFAR10(root=path, train=True, transform=T.Compose(train_tfms), download=True)
+    val_size = int((1 - cfg.dataset.split.train) * len(train_set))
+    train_size = len(train_set) - val_size
+    train_set, val_set = random_split(train_set, [train_size, val_size], generator=torch.Generator().manual_seed(cfg.training.seed))
+    val_set.dataset.transform = T.Compose(val_tfms)  # type: ignore
 
-
-def encode_text(text: str, vocab: dict, max_length: int):
-    tokens = text.split()
-    ids = [vocab.get(t, vocab["<UNK>"]) for t in tokens[:max_length]]
-    if len(ids) < max_length:
-        ids.extend([vocab["<PAD>"]] * (max_length - len(ids)))
-    return torch.tensor(ids)
-
-
-# -----------------------------------------------------------------------------
-# Dataloader builder (public API used by train.py)
-# -----------------------------------------------------------------------------
-
-
-def build_dataloaders(cfg) -> Tuple[DataLoader, DataLoader, int]:
-    if cfg.task == "image_classification":
-        return _build_image_dataloaders(cfg)
-    elif cfg.task == "text_classification":
-        return _build_text_dataloaders(cfg)
-    else:
-        raise ValueError(f"Unknown task {cfg.task}")
-
-
-# -----------------------------------------------------------------------------
-# Image pipeline
-# -----------------------------------------------------------------------------
-
-def _image_transforms(cfg):
-    train_tf = []
-    if cfg.dataset.augmentation.random_crop:
-        train_tf.append(T.RandomCrop(cfg.dataset.image_size, padding=4))
-    if cfg.dataset.augmentation.horizontal_flip:
-        train_tf.append(T.RandomHorizontalFlip())
-    train_tf.append(T.ToTensor())
-    train_tf.append(T.Normalize(mean=cfg.dataset.normalization.mean, std=cfg.dataset.normalization.std))
-
-    val_tf = T.Compose(
-        [T.ToTensor(), T.Normalize(mean=cfg.dataset.normalization.mean, std=cfg.dataset.normalization.std)]
-    )
-    return T.Compose(train_tf), val_tf
-
-
-def _build_image_dataloaders(cfg):
-    # Attempt to fetch CIFAR-10; fallback to synthetic
-    train_tf, val_tf = _image_transforms(cfg)
-    num_classes = 10
-    try:
-        train_set_full = CIFAR10(
-            root=Path("~/.cache/datasets").expanduser(),
-            train=True,
-            transform=train_tf,
-            download=True,
-        )
-        val_set_full = CIFAR10(
-            root=Path("~/.cache/datasets").expanduser(),
-            train=True,
-            transform=val_tf,
-            download=True,
-        )
-        # Manual split
-        total_size = len(train_set_full)
-        split_point = int(total_size * cfg.dataset.train_val_split[0])
-        idx = torch.randperm(total_size)
-        train_idx, val_idx = idx[:split_point], idx[split_point:]
-        train_set = torch.utils.data.Subset(train_set_full, train_idx)
-        val_set = torch.utils.data.Subset(val_set_full, val_idx)
-    except Exception as e:
-        print(f"Dataset download failed ({e}); using synthetic CIFAR-10 data.")
-        train_set = SyntheticImageDataset(5000, num_classes, cfg.dataset.image_size)
-        val_set = SyntheticImageDataset(1000, num_classes, cfg.dataset.image_size)
+    # A single batch for inference-time measurement
+    sample_inputs = torch.randn(1, cfg.dataset.channels, cfg.dataset.input_size, cfg.dataset.input_size)
 
     train_loader = DataLoader(
         train_set,
-        batch_size=cfg.dataset.batch_size,
+        batch_size=cfg.training.batch_size,
         shuffle=True,
-        num_workers=2,
-        pin_memory=False,
+        num_workers=cfg.training.num_workers,
+        pin_memory=True,
     )
     val_loader = DataLoader(
         val_set,
-        batch_size=cfg.dataset.batch_size,
+        batch_size=cfg.training.batch_size,
         shuffle=False,
-        num_workers=2,
-        pin_memory=False,
+        num_workers=cfg.training.num_workers,
+        pin_memory=True,
     )
-    return train_loader, val_loader, num_classes
+    return train_loader, val_loader, sample_inputs
 
 
-# -----------------------------------------------------------------------------
-# Text pipeline
-# -----------------------------------------------------------------------------
+def _build_alpaca(cfg: DictConfig):
+    path = Path(cfg.dataset.path) / "train.jsonl"
+    seq_length = cfg.dataset.max_length
+    # Build character vocabulary (simple lowercase ascii + specials)
+    all_chars = [chr(i) for i in range(32, 127)]
+    char2idx = {ch: idx + 2 for idx, ch in enumerate(all_chars)}
+    char2idx["<pad>"] = 0
+    char2idx["<unk>"] = 1
 
-# For the sake of resource limitation, we only implement synthetic fallback.
+    full_dataset = AlpacaCharDataset(path, seq_length, char2idx)
+    val_size = int((1 - cfg.dataset.split.train) * len(full_dataset))
+    train_size = len(full_dataset) - val_size
+    train_set, val_set = random_split(full_dataset, [train_size, val_size], generator=torch.Generator().manual_seed(cfg.training.seed))
 
+    sample_inputs = torch.randint(0, len(char2idx), (1, seq_length))
 
-def _build_text_dataloaders(cfg):
-    # Attempt to load dataset from TSV or JSONL if available locally.
-    root_path = Path("datasets") / cfg.dataset.name
-    text_samples = []
-    label_samples = []
-    if root_path.exists():
-        for line in root_path.open():
-            try:
-                record = json.loads(line)
-                text_samples.append(record[cfg.dataset.text_field])
-                label_samples.append(record[cfg.dataset.label_field])
-            except Exception:
-                continue
-    else:
-        print("Text dataset not found locally; using synthetic data.")
-        num_classes = 2
-        seq_len = cfg.dataset.max_length
-        train_set = SyntheticTextDataset(2000, seq_len, 5000, num_classes)
-        val_set = SyntheticTextDataset(500, seq_len, 5000, num_classes)
-        train_loader = DataLoader(train_set, batch_size=cfg.dataset.batch_size, shuffle=True)
-        val_loader = DataLoader(val_set, batch_size=cfg.dataset.batch_size, shuffle=False)
-        return train_loader, val_loader, num_classes
-
-    # Build vocabulary
-    vocab = build_vocab(text_samples, max_size=cfg.model.tokenizer.vocab_size)
-    num_classes = len(set(label_samples))
-
-    class TextDataset(Dataset):
-        def __init__(self, texts, labels):
-            self.enc = [encode_text(t, vocab, cfg.dataset.max_length) for t in texts]
-            self.labels = torch.tensor(labels, dtype=torch.long)
-
-        def __len__(self):
-            return len(self.labels)
-
-        def __getitem__(self, idx):
-            return self.enc[idx], self.labels[idx]
-
-    total_size = len(text_samples)
-    idx = list(range(total_size))
-    random.shuffle(idx)
-    split_point = int(total_size * cfg.dataset.train_val_split[0])
-    train_idx, val_idx = idx[:split_point], idx[split_point:]
-    train_texts = [text_samples[i] for i in train_idx]
-    val_texts = [text_samples[i] for i in val_idx]
-    train_labels = [label_samples[i] for i in train_idx]
-    val_labels = [label_samples[i] for i in val_idx]
-
-    train_set = TextDataset(train_texts, train_labels)
-    val_set = TextDataset(val_texts, val_labels)
-    train_loader = DataLoader(train_set, batch_size=cfg.dataset.batch_size, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=cfg.dataset.batch_size, shuffle=False)
-    return train_loader, val_loader, num_classes
+    train_loader = DataLoader(
+        train_set,
+        batch_size=cfg.training.batch_size,
+        shuffle=True,
+        num_workers=cfg.training.num_workers,
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=cfg.training.batch_size,
+        shuffle=False,
+        num_workers=cfg.training.num_workers,
+    )
+    return train_loader, val_loader, sample_inputs

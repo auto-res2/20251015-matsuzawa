@@ -1,15 +1,24 @@
-[build-system]
-requires = ["setuptools>=42", "wheel"]
-
-[project]
-name = "research-experiment"
+[tool.poetry]
+name = "hydra-experiment"
 version = "0.1.0"
-dependencies = [
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
-    "hydra-core>=1.3.2",
-    "optuna>=3.4.0",
-    "wandb>=0.15.0",
-    "matplotlib>=3.8.0",
-    "pyyaml>=6.0",
-]
+description = "Hydra-driven experiment framework"
+authors = ["AI Researcher <ai@research.org>"]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+torch = "^2.0.0"
+torchvision = "^0.15.0"
+hydra-core = "^1.3.2"
+omegaconf = "^2.3.0"
+optuna = "^3.4.0"
+matplotlib = "^3.8.0"
+scikit-learn = "^1.3.0"
+wandb = "^0.16.0"
+transformers = "^4.35.0"
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.10.0"
+
+[build-system]
+requires = ["poetry-core>=1.5.0"]
+build-backend = "poetry.core.masonry.api"

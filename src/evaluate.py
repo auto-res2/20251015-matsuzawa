@@ -1,88 +1,79 @@
 import json
-import os
+import sys
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
 
-import hydra
 import matplotlib.pyplot as plt
-from omegaconf import OmegaConf
+import numpy as np
+import hydra
+from omegaconf import DictConfig
 
-
-class NoOpWandB:
-    def __init__(self):
-        self.enabled = False
-
-    def init(self, *args, **kwargs):
-        pass
-
-    def log(self, *args, **kwargs):
-        pass
-
-    def save(self, *args, **kwargs):
-        pass
-
-    def finish(self):
-        pass
-
-
-def maybe_init_wandb(cfg):
-    if cfg.wandb.mode == "disabled":
-        return NoOpWandB()
-    import wandb
-
-    run = wandb.init(
-        project=cfg.wandb.project,
-        entity=cfg.wandb.entity,
-        name=f"evaluation-{cfg.results_dir}",
-        mode=cfg.wandb.mode,
-    )
-    run.enabled = True
-    return run
-
-
-def read_results(dir_path: Path) -> Dict:
-    with (dir_path / "results.json").open() as fp:
-        return json.load(fp)
-
-
-def aggregate_results(results_dirs: List[Path]):
-    records = [read_results(p) for p in results_dirs]
-    return records
-
-
-def plot_accuracy(records: List[Dict], out_path: Path):
-    names = [r["run_id"] for r in records]
-    accs = [r["best_val_accuracy"] for r in records]
-    fig, ax = plt.subplots(figsize=(8, 4))
-    bars = ax.bar(range(len(names)), accs)
-    ax.set_ylabel("Validation Accuracy")
-    ax.set_xticks(range(len(names)))
-    ax.set_xticklabels(names, rotation=45, ha="right")
-    fig.tight_layout()
-    fig.savefig(out_path)
-    plt.close(fig)
+try:
+    import wandb  # noqa: F401
+except ImportError:
+    wandb = None  # pragma: no cover
 
 
 @hydra.main(config_path="../config", config_name="config", version_base=None)
-def main(cfg) -> None:
-    results_root = Path(cfg.results_dir)
-    sub_dirs = [p for p in results_root.iterdir() if p.is_dir()]
-    records = aggregate_results(sub_dirs)
+def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
+    results_root = Path(hydra.utils.to_absolute_path(cfg.results_dir))
+    result_files = list(results_root.glob("*/results.json"))
+    if not result_files:
+        print("No result files found.")
+        sys.exit(0)
 
-    # Print aggregated numbers --------------------------------------------------
-    summary = {r["run_id"]: r["best_val_accuracy"] for r in records}
-    print(json.dumps(summary, indent=2))
+    summary: List[Dict] = []
+    for rf in result_files:
+        with rf.open("r", encoding="utf-8") as f:
+            summary.append(json.load(f))
 
-    # Plot & (optionally) upload to WandB ---------------------------------------
+    # Prepare plots
+    run_ids = [r["run_id"] for r in summary]
+    accuracies = [r["final_val_accuracy"] for r in summary]
+    f1s = [r["final_val_f1"] for r in summary]
+    inference = [r["inference_time_ms"] for r in summary]
+    params = [r["model_num_params"] for r in summary]
+
+    x = np.arange(len(run_ids))
+    width = 0.2
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars1 = ax.bar(x - width, accuracies, width, label="Accuracy")
+    bars2 = ax.bar(x, f1s, width, label="F1")
+    bars3 = ax.bar(x + width, inference, width, label="Inference(ms)")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(run_ids, rotation=45, ha="right")
+    ax.legend()
+    ax.set_title("Comparison of Metrics across Runs")
+    fig.tight_layout()
+
     fig_path = results_root / "comparison.png"
-    plot_accuracy(records, fig_path)
+    fig.savefig(fig_path)
 
-    wb = maybe_init_wandb(cfg)
-    if getattr(wb, "enabled", False):
-        wb.log({"validation_accuracy_comparison": wandb.Image(str(fig_path))})  # type: ignore
-        wb.save(str(fig_path))  # type: ignore
-        wb.finish()  # type: ignore
+    # WandB upload if enabled
+    use_wandb = cfg.wandb.mode.lower() != "disabled" and wandb is not None
+    if use_wandb:
+        wandb_run = wandb.init(
+            project=cfg.wandb.project,
+            entity=cfg.wandb.entity,
+            mode=cfg.wandb.mode,
+            reinit=True,
+            name="evaluation-comparison",
+        )
+        wandb_run.log({"comparison": wandb.Image(str(fig_path))})
+        wandb_run.finish()
+
+    # Print aggregated results
+    comparison = {
+        "run_ids": run_ids,
+        "accuracy": accuracies,
+        "f1": f1s,
+        "inference_time_ms": inference,
+        "params": params,
+    }
+    print(json.dumps(comparison, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    _main()

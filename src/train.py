@@ -1,305 +1,284 @@
-import json
-import os
-import random
-import time
+import json, os, sys, time, random, math, tempfile
 from pathlib import Path
-from typing import Dict, Tuple, Any
+from typing import Any, Dict, Tuple, List
 
-import hydra
 import numpy as np
-import optuna
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from hydra.utils import to_absolute_path
-from omegaconf import OmegaConf
+from omegaconf import DictConfig, OmegaConf
+import hydra
+from sklearn.metrics import accuracy_score, f1_score
 
-from .model import build_model
 from .preprocess import build_dataloaders
+from .model import build_model, model_num_parameters
 
-# -----------------------------------------------------------------------------
-# Helper utilities
-# -----------------------------------------------------------------------------
+try:
+    import wandb  # noqa: F401
+except ImportError:  # pragma: no cover
+    wandb = None
+
+
+class _DummyWandB:  # pylint: disable=too-few-public-methods
+    """A no-op replacement when wandb is disabled."""
+
+    def __getattr__(self, name):
+        def _noop(*_, **__):
+            return None
+
+        return _noop
+
+
+# ----------------------------------------------------------------------------
+# Utility functions
+# ----------------------------------------------------------------------------
 
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
-def count_parameters(model: nn.Module) -> int:
-    return sum(p.numel() for p in model.parameters())
+def get_device(cfg: DictConfig) -> torch.device:
+    if torch.cuda.is_available() and cfg.training.device != "cpu":
+        return torch.device("cuda")
+    return torch.device("cpu")
 
 
-class WandbLogger:
-    """A thin wrapper that is a no-op when WandB is disabled."""
-
-    def __init__(self, cfg):
-        self._enabled = cfg.wandb.mode != "disabled"
-        if self._enabled:
-            import wandb
-
-            self.run = wandb.init(
-                entity=cfg.wandb.entity,
-                project=cfg.wandb.project,
-                name=cfg.run_id,
-                config=OmegaConf.to_container(cfg, resolve=True),
-                mode=cfg.wandb.mode,
-            )
-            meta_path = Path(cfg.results_dir) / "wandb_metadata.json"
-            meta_path.parent.mkdir(parents=True, exist_ok=True)
-            with meta_path.open("w") as fp:
-                json.dump(
-                    {
-                        "wandb_entity": cfg.wandb.entity,
-                        "wandb_project": cfg.wandb.project,
-                        "wandb_run_id": self.run.id,
-                    },
-                    fp,
-                )
-            print(f"WandB run URL: {self.run.url}")
-        else:
-            self.run = None
-
-    def log(self, *args, **kwargs):
-        if self._enabled:
-            import wandb
-
-            wandb.log(*args, **kwargs)
-
-    def upload_file(self, *args, **kwargs):
-        if self._enabled:
-            import wandb
-
-            wandb.save(*args, **kwargs)
-
-    def finish(self):
-        if self._enabled:
-            import wandb
-
-            wandb.finish()
+def log_experiment_description(cfg: DictConfig):
+    description = (
+        f"Running experiment '{cfg.run_id}' with method '{cfg.method}'.\n"
+        f"Model: {cfg.model.name} | Dataset: {cfg.dataset.name}\n"
+        f"Training for {cfg.training.epochs} epochs, batch_size={cfg.training.batch_size}."
+    )
+    print("=" * 80)
+    print(description)
+    print("=" * 80, flush=True)
 
 
-# -----------------------------------------------------------------------------
-# Training & Validation loops
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Training / Evaluation helpers
+# ----------------------------------------------------------------------------
 
 def train_one_epoch(
     model: nn.Module,
-    loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
     optimizer: optim.Optimizer,
     device: torch.device,
-    scheduler=None,
-) -> float:
+    loader: torch.utils.data.DataLoader,
+) -> Tuple[float, float]:
     model.train()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-    start_time = time.time()
-    for batch in loader:
-        inputs, labels = batch[0].to(device), batch[1].to(device)
+    epoch_loss, preds, gts = 0.0, [], []
+    for x, y in loader:
+        x, y = x.to(device), y.to(device)
         optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = F.cross_entropy(outputs, labels)
+        outputs = model(x)
+        loss = criterion(outputs, y)
         loss.backward()
         optimizer.step()
-        if scheduler is not None:
-            scheduler.step()
-        total_loss += loss.item() * labels.size(0)
-        _, pred = outputs.max(1)
-        correct += pred.eq(labels).sum().item()
-        total += labels.size(0)
-    elapsed = time.time() - start_time
-    return total_loss / total, correct / total, elapsed
+        epoch_loss += loss.item() * x.size(0)
+        preds.extend(outputs.argmax(dim=1).detach().cpu().numpy())
+        gts.extend(y.detach().cpu().numpy())
+    epoch_loss /= len(loader.dataset)
+    return epoch_loss, accuracy_score(gts, preds)
 
 
 def evaluate(
     model: nn.Module,
-    loader: torch.utils.data.DataLoader,
+    criterion: nn.Module,
     device: torch.device,
+    loader: torch.utils.data.DataLoader,
 ) -> Tuple[float, float, float]:
     model.eval()
-    total_loss = 0.0
-    correct = 0
-    total = 0
-    start_time = time.time()
+    loss, preds, gts = 0.0, [], []
     with torch.no_grad():
-        for batch in loader:
-            inputs, labels = batch[0].to(device), batch[1].to(device)
-            outputs = model(inputs)
-            loss = F.cross_entropy(outputs, labels)
-            total_loss += loss.item() * labels.size(0)
-            _, pred = outputs.max(1)
-            correct += pred.eq(labels).sum().item()
-            total += labels.size(0)
-    elapsed = time.time() - start_time
-    return total_loss / total, correct / total, elapsed / total  # per-sample time
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            outputs = model(x)
+            loss += criterion(outputs, y).item() * x.size(0)
+            preds.extend(outputs.argmax(dim=1).cpu().numpy())
+            gts.extend(y.cpu().numpy())
+    loss /= len(loader.dataset)
+    acc = accuracy_score(gts, preds)
+    f1 = f1_score(gts, preds, average="macro")
+    return loss, acc, f1
 
 
-# -----------------------------------------------------------------------------
-# Objective for Optuna
-# -----------------------------------------------------------------------------
-
-def optuna_objective(trial: optuna.Trial, cfg) -> float:
-    # Mutate hyper-parameters in cfg according to the search space
-    for hp_name, hp_conf in cfg.optuna.search_space.items():
-        if hp_conf.type == "loguniform":
-            val = trial.suggest_float(hp_name, hp_conf.low, hp_conf.high, log=True)
-        elif hp_conf.type == "uniform":
-            val = trial.suggest_float(hp_name, hp_conf.low, hp_conf.high)
-        elif hp_conf.type == "int":
-            val = trial.suggest_int(hp_name, hp_conf.low, hp_conf.high)
-        elif hp_conf.type == "categorical":
-            val = trial.suggest_categorical(hp_name, hp_conf.choices)
-        else:
-            raise ValueError(f"Unknown search space type {hp_conf.type}")
-        # hierarchical assignment (may be nested like training.learning_rate)
-        OmegaConf.update(cfg, hp_name, val, merge=False)
-
-    return run_single_training(cfg, trial=trial)
+def measure_inference_time(model: nn.Module, device: torch.device, sample: torch.Tensor) -> float:
+    model.eval()
+    with torch.no_grad():
+        sample = sample.to(device)
+        # Warm-up
+        for _ in range(5):
+            _ = model(sample)
+        t0 = time.perf_counter()
+        _ = model(sample)
+        t1 = time.perf_counter()
+    return (t1 - t0) * 1000  # ms
 
 
-# -----------------------------------------------------------------------------
-# Core training routine returning primary validation metric (higher is better)
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Trainer entry point
+# ----------------------------------------------------------------------------
 
-def run_single_training(cfg, trial=None) -> float:
-    device = torch.device(cfg.training.device)
-    set_seed(cfg.training.seed)
-
-    train_loader, val_loader, num_classes = build_dataloaders(cfg)
-    model = build_model(cfg, num_classes).to(device)
-
-    # ------------------------------------------------------------------
-    # Optimizer & Scheduler
-    # ------------------------------------------------------------------
-    if cfg.training.optimizer == "sgd":
-        optimizer = optim.SGD(
-            model.parameters(),
-            lr=cfg.training.learning_rate,
-            momentum=getattr(cfg.training, "momentum", 0.0),
-            weight_decay=cfg.training.weight_decay,
-        )
-    elif cfg.training.optimizer in {"adam", "adamw"}:
-        opt_class = optim.Adam if cfg.training.optimizer == "adam" else optim.AdamW
-        optimizer = opt_class(
-            model.parameters(),
-            lr=cfg.training.learning_rate,
-            weight_decay=cfg.training.weight_decay,
-        )
-    else:
-        raise ValueError(f"Unsupported optimizer {cfg.training.optimizer}")
-
-    # Simple scheduler support
-    if cfg.training.lr_scheduler.name == "cosine_annealing":
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.lr_scheduler.T_max)
-    elif cfg.training.lr_scheduler.name == "linear":
-        # Linear warm-up + decay (implemented via LambdaLR)
-        def lr_lambda(step):
-            warmup = cfg.training.lr_scheduler.warmup_steps
-            if step < warmup:
-                return float(step) / float(max(1, warmup))
-            return max(
-                0.0,
-                float(cfg.training.epochs * len(train_loader) - step)
-                / float(max(1, cfg.training.epochs * len(train_loader) - warmup)),
-            )
-
-        scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    else:
-        scheduler = None
-
-    # ------------------------------------------------------------------
-    # Training loop
-    # ------------------------------------------------------------------
-    best_val_acc = 0.0
-    logger = WandbLogger(cfg)
-    history = []
-    epochs = 1 if cfg.trial_mode else cfg.training.epochs
-    for epoch in range(1, epochs + 1):
-        train_loss, train_acc, _ = train_one_epoch(model, train_loader, optimizer, device, scheduler)
-        val_loss, val_acc, val_inf_time = evaluate(model, val_loader, device)
-        history.append(
-            {
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "train_acc": train_acc,
-                "val_loss": val_loss,
-                "val_acc": val_acc,
-                "val_inference_time": val_inf_time,
-            }
-        )
-        logger.log({**history[-1], "epoch": epoch})
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            # save checkpoint
-            ckp_path = Path(cfg.results_dir) / "best_model.pt"
-            torch.save(model.state_dict(), ckp_path)
-            logger.upload_file(str(ckp_path))
-
-        if trial is not None:
-            trial.report(val_acc, epoch)
-            if trial.should_prune():
-                raise optuna.TrialPruned()
-
-    logger.finish()
-
-    # Save results JSON -------------------------------------------------
-    results = {
-        "run_id": cfg.run_id,
-        "best_val_accuracy": best_val_acc,
-        "epochs_ran": epochs,
-        "history": history,
-        "model_parameters": count_parameters(model),
-    }
-    res_path = Path(cfg.results_dir) / "results.json"
-    res_path.parent.mkdir(parents=True, exist_ok=True)
-    with res_path.open("w") as fp:
-        json.dump(results, fp, indent=2)
-
-    # Print experiment description + numerical data --------------------
-    print("#" * 80)
-    print("Experiment description:")
-    print(OmegaConf.to_yaml(cfg))
-    print("#" * 80)
-    print("Experimental results:")
-    print(json.dumps(results, indent=2))
-
-    return best_val_acc
-
-
-# -----------------------------------------------------------------------------
-# Entry point driven by Hydra
-# -----------------------------------------------------------------------------
-@hydra.main(config_path="../config/experiment", version_base=None)
-def main(cfg) -> None:
-    cfg.results_dir = to_absolute_path(cfg.results_dir)
-    Path(cfg.results_dir).mkdir(parents=True, exist_ok=True)
-
-    # Adapt config for trial_mode ------------------------------------------------
+@hydra.main(config_path="../config", config_name="config", version_base=None)
+def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
+    # Apply trial-mode overrides (epochs=1, no Optuna)
     if cfg.trial_mode:
         cfg.training.epochs = 1
         cfg.optuna.n_trials = 0
 
-    # -------------------------------------------------------------------------
-    # If Optuna is enabled, perform optimisation, else run once
-    # -------------------------------------------------------------------------
-    best_metric = None
-    if cfg.optuna.n_trials > 0 and not cfg.trial_mode:
-        study = optuna.create_study(direction="maximize")
-        study.optimize(lambda trial: optuna_objective(trial, cfg.copy()), n_trials=cfg.optuna.n_trials)
-        best_metric = study.best_value
-        # Save study
-        study_path = Path(cfg.results_dir) / "optuna_study.pkl"
-        optuna.study.persist_study(study, study_path)
-    else:
-        best_metric = run_single_training(cfg)
+    # Create results directory structure
+    results_root = Path(hydra.utils.to_absolute_path(cfg.results_dir))
+    run_dir = results_root / cfg.run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    # Done --------------------------------------------------------------------
-    print(json.dumps({"run_id": cfg.run_id, "best_val_metric": best_metric}))
+    # ---------------------------------------------------------------------
+    # Logging & description
+    # ---------------------------------------------------------------------
+    log_experiment_description(cfg)
+
+    # ---------------------------------------------------------------------
+    # Seed / device
+    # ---------------------------------------------------------------------
+    set_seed(cfg.training.seed)
+    device = get_device(cfg)
+
+    # ---------------------------------------------------------------------
+    # Data
+    # ---------------------------------------------------------------------
+    train_loader, val_loader, sample_batch = build_dataloaders(cfg)
+
+    # ---------------------------------------------------------------------
+    # Model
+    # ---------------------------------------------------------------------
+    model = build_model(cfg.model).
+    num_params = model_num_parameters(model)
+    model.to(device)
+
+    # ---------------------------------------------------------------------
+    # Optimizer & Criterion
+    # ---------------------------------------------------------------------
+    if cfg.training.optimizer.name.lower() == "sgd":
+        optimizer = optim.SGD(
+            model.parameters(),
+            lr=cfg.training.optimizer.lr,
+            momentum=cfg.training.optimizer.momentum,
+            weight_decay=cfg.training.optimizer.weight_decay,
+        )
+    elif cfg.training.optimizer.name.lower() == "adam":
+        optimizer = optim.Adam(
+            model.parameters(),
+            lr=cfg.training.optimizer.lr,
+            weight_decay=cfg.training.optimizer.weight_decay,
+        )
+    elif cfg.training.optimizer.name.lower() in {"adamw", "adam_w"}:
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=cfg.training.optimizer.lr,
+            weight_decay=cfg.training.optimizer.weight_decay,
+        )
+    else:
+        raise ValueError(f"Unsupported optimizer {cfg.training.optimizer.name}")
+
+    criterion = nn.CrossEntropyLoss()
+
+    # ---------------------------------------------------------------------
+    # WandB initialisation
+    # ---------------------------------------------------------------------
+    wb_mode = cfg.wandb.mode.lower()
+    use_wandb = wb_mode != "disabled" and wandb is not None
+    wb_run = _DummyWandB()  # type: ignore
+    if use_wandb:
+        wb_run = wandb.init(
+            project=cfg.wandb.project,
+            entity=cfg.wandb.entity,
+            config=OmegaConf.to_container(cfg, resolve=True),
+            reinit=True,
+            mode=wb_mode,
+            name=cfg.run_id,
+        )
+        # Save WandB metadata for later GI actions
+        metadata = {
+            "wandb_entity": cfg.wandb.entity,
+            "wandb_project": cfg.wandb.project,
+            "wandb_run_id": wb_run.id,
+        }
+        with (run_dir / "wandb_metadata.json").open("w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"WandB URL: {wb_run.url}")
+
+    # ---------------------------------------------------------------------
+    # Training loop
+    # ---------------------------------------------------------------------
+    history = {"epoch": [], "train_loss": [], "train_acc": [], "val_loss": [], "val_acc": [], "val_f1": []}
+
+    best_val_acc = 0.0
+    for epoch in range(1, cfg.training.epochs + 1):
+        t_start = time.perf_counter()
+        train_loss, train_acc = train_one_epoch(model, criterion, optimizer, device, train_loader)
+        val_loss, val_acc, val_f1 = evaluate(model, criterion, device, val_loader)
+        t_end = time.perf_counter()
+
+        history["epoch"].append(epoch)
+        history["train_loss"].append(train_loss)
+        history["train_acc"].append(train_acc)
+        history["val_loss"].append(val_loss)
+        history["val_acc"].append(val_acc)
+        history["val_f1"].append(val_f1)
+
+        # WandB logging
+        if use_wandb:
+            wb_run.log(
+                {
+                    "epoch": epoch,
+                    "train_loss": train_loss,
+                    "train_acc": train_acc,
+                    "val_loss": val_loss,
+                    "val_acc": val_acc,
+                    "val_f1": val_f1,
+                    "epoch_time": t_end - t_start,
+                }
+            )
+
+        # Save best checkpoint
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            ckpt_path = run_dir / "best_model.pt"
+            torch.save({"model_state_dict": model.state_dict(), "epoch": epoch}, ckpt_path)
+            if use_wandb:
+                wb_run.save(str(ckpt_path))
+
+    # ---------------------------------------------------------------------
+    # Final metrics
+    # ---------------------------------------------------------------------
+    inf_time = measure_inference_time(model, device, sample_batch)
+
+    results: Dict[str, Any] = {
+        "run_id": cfg.run_id,
+        "method": cfg.method,
+        "dataset": cfg.dataset.name,
+        "model": cfg.model.name,
+        "final_val_accuracy": history["val_acc"][-1],
+        "final_val_f1": history["val_f1"][-1],
+        "inference_time_ms": inf_time,
+        "model_num_params": num_params,
+        "history": history,
+    }
+
+    # Output experimental numerical data to stdout
+    print(json.dumps(results, indent=2))
+
+    # Save to file
+    with (run_dir / "results.json").open("w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+
+    if use_wandb:
+        wb_run.finish()
 
 
 if __name__ == "__main__":
-    main()
+    _main()

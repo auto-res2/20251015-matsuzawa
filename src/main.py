@@ -1,56 +1,54 @@
-import json
+"""Main orchestrator launching train subprocess and optional evaluation."""
+import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import List
 
 import hydra
-from hydra.utils import to_absolute_path
-from omegaconf import OmegaConf, DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 
 @hydra.main(config_path="../config", config_name="config", version_base=None)
-def main(cfg: DictConfig):
-    results_root = Path(to_absolute_path(cfg.results_dir))
-    results_root.mkdir(parents=True, exist_ok=True)
+def _main(cfg: DictConfig) -> None:  # pylint: disable=too-many-locals
+    run_id = cfg.run
+    results_dir = Path(hydra.utils.to_absolute_path(cfg.results_dir)).as_posix()
 
-    def _run_single(run_id: str):
-        run_results_dir = results_root / run_id
-        cmd = [
-            sys.executable,
-            "-u",
-            "-m",
-            "src.train",
-            f"--config-name={run_id}",
-            f"results_dir={run_results_dir}",
-            f"trial_mode={cfg.trial_mode}",
-            f"wandb.mode={cfg.wandb.mode}",
-        ]
-        print("Executing: ", " ".join(map(str, cmd)))
-        subprocess.run(cmd, check=True)
+    # ------------------------------------------------------------------
+    # Build subprocess command for training
+    # ------------------------------------------------------------------
+    cmd: List[str] = [
+        sys.executable,
+        "-u",
+        "-m",
+        "src.train",
+        f"run={run_id}",
+        f"results_dir={results_dir}",
+    ]
+    # Propagate flags
+    if cfg.trial_mode:
+        cmd.append("trial_mode=true")
+    # Forward wandb override if present
+    if "wandb" in cfg and "mode" in cfg.wandb:
+        cmd.append(f"wandb.mode={cfg.wandb.mode}")
 
-    # Determine which runs to execute------------------------------------------------
-    run_list: List[str]
-    run_param = cfg.get("run", "all")
-    if run_param == "all":
-        run_list = cfg.run_list
-    else:
-        run_list = [run_param]
-    for r in run_list:
-        _run_single(r)
+    print("Launching training subprocess: \n" + " ".join(cmd))
+    subprocess.run(cmd, check=True)
 
-    # After all runs, trigger evaluation ------------------------------------------------
-    cmd_eval = [
+    # ------------------------------------------------------------------
+    # After training, launch evaluation (across available results)
+    # ------------------------------------------------------------------
+    eval_cmd: List[str] = [
         sys.executable,
         "-u",
         "-m",
         "src.evaluate",
-        f"results_dir={results_root}",
+        f"results_dir={results_dir}",
         f"wandb.mode={cfg.wandb.mode}",
     ]
-    print("Executing evaluation: ", " ".join(map(str, cmd_eval)))
-    subprocess.run(cmd_eval, check=True)
+    print("Launching evaluation subprocess: \n" + " ".join(eval_cmd))
+    subprocess.run(eval_cmd, check=True)
 
 
 if __name__ == "__main__":
-    main()
+    _main()

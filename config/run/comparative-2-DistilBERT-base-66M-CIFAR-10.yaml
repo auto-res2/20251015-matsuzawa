@@ -1,0 +1,62 @@
+run_id: comparative-2-DistilBERT-base-66M-CIFAR-10
+method: comparative-2
+model:
+  name: DistilBERT
+  pretrained: false        # trained from scratch on image tokens
+  hidden_size: 768
+  num_layers: 6
+  num_parameters: 6.6e7
+  image_patch_size: 4      # 4×4 pixel patches -> 64 tokens for 32×32 image
+  seq_length: 64
+  dropout: 0.1
+  num_classes: 10
+
+dataset:
+  name: CIFAR-10
+  path: /datasets/cifar10
+  num_classes: 10
+  input_size: 32
+  channels: 3
+  normalization:
+    mean: [0.4914, 0.4822, 0.4465]
+    std:  [0.2023, 0.1994, 0.2010]
+  augmentation:
+    random_crop:
+      size: 32
+      padding: 4
+    random_horizontal_flip:
+      p: 0.5
+  split:
+    train: 0.9
+    val: 0.1
+
+training:
+  epochs: 30
+  batch_size: 32
+  optimizer:
+    name: adamw
+    lr: 3e-4
+    weight_decay: 0.01
+  lr_scheduler:
+    name: linear_warmup
+    warmup_steps: 500
+  seed: 42
+  device: cpu
+
+optuna:
+  n_trials: 25
+  direction: maximize
+  search_space:
+    optimizer.lr:
+      type: loguniform
+      low: 1e-5
+      high: 1e-3
+    batch_size:
+      type: categorical
+      choices: [8, 16, 32]
+    model.image_patch_size:
+      type: int
+      low: 2
+      high: 8
+
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]

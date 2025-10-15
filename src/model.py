@@ -1,59 +1,66 @@
+"""Model implementations for MobileNetV2, DistilBERT variants and CharCNN."""
+from typing import Any
 import math
-from typing import Optional
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from omegaconf import DictConfig
 
-# -----------------------------------------------------------------------------
-# Helper blocks for MobileNetV2
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# MobileNetV2 Implementation (2-D)
+# ----------------------------------------------------------------------------
 
-def _make_divisible(v, divisor=8, min_value=None):
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
+
+def _conv_bn(inp: int, oup: int, stride: int):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 3, stride, 1, bias=False),
+        nn.BatchNorm2d(oup),
+        nn.ReLU6(inplace=True),
+    )
+
+
+def _conv_1x1_bn(inp: int, oup: int):
+    return nn.Sequential(
+        nn.Conv2d(inp, oup, 1, 1, 0, bias=False),
+        nn.BatchNorm2d(oup),
+        nn.ReLU6(inplace=True),
+    )
 
 
 class InvertedResidual(nn.Module):
-    def __init__(self, inp, oup, stride, expand_ratio):
+    def __init__(self, inp: int, oup: int, stride: int, expand_ratio: int):
         super().__init__()
+        self.stride = stride
         hidden_dim = int(round(inp * expand_ratio))
-        self.identity = stride == 1 and inp == oup
+        self.use_res_connect = self.stride == 1 and inp == oup
+
         layers = []
         if expand_ratio != 1:
-            layers.append(nn.Conv2d(inp, hidden_dim, 1, 1, 0, bias=False))
-            layers.append(nn.BatchNorm2d(hidden_dim))
-            layers.append(nn.ReLU6(inplace=True))
+            layers.append(_conv_1x1_bn(inp, hidden_dim))
         layers.extend(
             [
+                # depthwise 3x3
                 nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),
                 nn.BatchNorm2d(hidden_dim),
                 nn.ReLU6(inplace=True),
+                # project
                 nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),
                 nn.BatchNorm2d(oup),
             ]
         )
         self.conv = nn.Sequential(*layers)
 
-    def forward(self, x):
-        if self.identity:
+    def forward(self, x):  # noqa: D401
+        if self.use_res_connect:
             return x + self.conv(x)
-        else:
-            return self.conv(x)
+        return self.conv(x)
 
 
 class MobileNetV2(nn.Module):
-    def __init__(self, num_classes: int = 10, width_mult: float = 1.0):
+    def __init__(self, num_classes: int = 1000, width_mult: float = 1.0, dropout: float = 0.2):
         super().__init__()
-        block = InvertedResidual
-        input_channel = 32
-        last_channel = 1280
-
-        interverted_residual_setting = [
+        # Setting of inverted residual blocks
+        self.cfgs = [
             # t, c, n, s
             [1, 16, 1, 1],
             [6, 24, 2, 2],
@@ -63,171 +70,165 @@ class MobileNetV2(nn.Module):
             [6, 160, 3, 2],
             [6, 320, 1, 1],
         ]
-
-        # building first layer
-        input_channel = _make_divisible(input_channel * width_mult, 4)
-        self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), 4)
-        features = [
-            nn.Conv2d(3, input_channel, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(input_channel),
-            nn.ReLU6(inplace=True),
-        ]
+        input_channel = int(32 * width_mult)
+        layers: list[nn.Module] = [_conv_bn(3, input_channel, 2)]
+        block = InvertedResidual
         # building inverted residual blocks
-        for t, c, n, s in interverted_residual_setting:
-            output_channel = _make_divisible(c * width_mult, 4)
+        for t, c, n, s in self.cfgs:
+            output_channel = int(c * width_mult)
             for i in range(n):
-                stride = s if i == 0 else 1
-                features.append(block(input_channel, output_channel, stride, expand_ratio=t))
+                layers.append(block(input_channel, output_channel, s if i == 0 else 1, t))
                 input_channel = output_channel
-        # building last several layers
-        features.append(nn.Conv2d(input_channel, self.last_channel, 1, 1, 0, bias=False))
-        features.append(nn.BatchNorm2d(self.last_channel))
-        features.append(nn.ReLU6(inplace=True))
-        self.features = nn.Sequential(*features)
+        last_channel = int(1280 * width_mult) if width_mult > 1.0 else 1280
+        layers.append(_conv_1x1_bn(input_channel, last_channel))
+        self.features = nn.Sequential(*layers)
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = nn.Sequential(nn.Dropout(p=dropout), nn.Linear(last_channel, num_classes))
+        self._initialize_weights()
 
-        # building classifier
-        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Linear(self.last_channel, num_classes)
+    def forward(self, x):  # noqa: D401
+        x = self.features(x)
+        x = self.pool(x).flatten(1)
+        x = self.classifier(x)
+        return x
 
-        # weight initialization
+    def _initialize_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode="fan_out")
-            elif isinstance(m, nn.BatchNorm2d):
-                nn.init.ones_(m.weight)
-                nn.init.zeros_(m.bias)
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2.0 / n))
+                if m.bias is not None:
+                    m.bias.data.zero_()
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
             elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, 0, 0.01)
-                nn.init.zeros_(m.bias)
+                m.weight.data.normal_(0, 0.01)
+                m.bias.data.zero_()
 
-    def forward(self, x):
-        x = self.features(x)
-        x = self.avgpool(x).flatten(1)
+
+# ----------------------------------------------------------------------------
+# Char 1-D MobileNet-style CNN
+# ----------------------------------------------------------------------------
+
+class CharMobileNet(nn.Module):
+    """1-D CNN inspired by MobileNet blocks for character sequences."""
+
+    def __init__(self, vocab_size: int, embedding_dim: int, seq_length: int, num_classes: int, dropout: float):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
+        self.conv = nn.Sequential(
+            nn.Conv1d(embedding_dim, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(128, 256, kernel_size=3, padding=1, groups=128),
+            nn.ReLU(),
+            nn.Conv1d(256, 256, kernel_size=1),
+            nn.ReLU(),
+            nn.AdaptiveMaxPool1d(1),
+        )
+        self.classifier = nn.Sequential(nn.Flatten(), nn.Dropout(dropout), nn.Linear(256, num_classes))
+
+    def forward(self, x):  # noqa: D401
+        x = self.embedding(x).transpose(1, 2)  # (B, E, L)
+        x = self.conv(x)
         x = self.classifier(x)
         return x
 
 
-# -----------------------------------------------------------------------------
-# Very small Transformer encoder used for Distil-style models (image & text)
-# -----------------------------------------------------------------------------
-
-class TransformerClassifier(nn.Module):
-    def __init__(
-        self,
-        vocab_size: int,
-        num_classes: int,
-        seq_length: int,
-        d_model: int = 128,
-        nhead: int = 4,
-        num_layers: int = 2,
-        dropout: float = 0.1,
-        sap: bool = False,  # Spatial average pooling flag for images
-    ):
-        super().__init__()
-        self.sap = sap
-        self.token_emb = nn.Embedding(vocab_size, d_model)
-        self.pos_emb = nn.Parameter(torch.zeros(1, seq_length, d_model))
-        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model * 4, dropout=dropout)
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers)
-        self.classifier = nn.Linear(d_model, num_classes)
-
-    def forward(self, x):
-        # x: [B, seq_len] (text) or [B, seq_len, d]
-        if x.dim() == 3 and self.sap:
-            b, t, d = x.shape
-            x = x
-        else:
-            x = self.token_emb(x) + self.pos_emb[:, : x.size(1)]
-        x = self.encoder(x.transpose(0, 1)).mean(dim=0)
-        return self.classifier(x)
-
+# ----------------------------------------------------------------------------
+# Image Transformer (DistilBERT-like) for Vision
+# ----------------------------------------------------------------------------
 
 class PatchEmbed(nn.Module):
-    def __init__(self, img_size=32, patch_size=4, in_chans=3, embed_dim=128):
+    def __init__(self, in_chans: int, embed_dim: int, patch_size: int):
         super().__init__()
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.num_patches = (img_size // patch_size) ** 2
         self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
 
-    def forward(self, x):
-        x = self.proj(x)  # B, C, H/P, W/P
-        x = x.flatten(2).transpose(1, 2)  # B, num_patches, embed_dim
+    def forward(self, x):  # noqa: D401
+        x = self.proj(x)  # (B, C, H', W')
+        x = x.flatten(2).transpose(1, 2)  # (B, N, C)
         return x
 
 
-class ImageTransformerClassifier(nn.Module):
-    def __init__(
-        self,
-        img_size: int,
-        patch_size: int,
-        num_classes: int,
-        embed_dim: int = 128,
-        depth: int = 4,
-        nhead: int = 4,
-    ):
+class ImageTransformer(nn.Module):
+    """Simplified Transformer encoder for image patches."""
+
+    def __init__(self, cfg: DictConfig):
         super().__init__()
-        self.patch_embed = PatchEmbed(img_size, patch_size, 3, embed_dim)
-        self.pos_emb = nn.Parameter(torch.zeros(1, (img_size // patch_size) ** 2, embed_dim))
-        encoder_layer = nn.TransformerEncoderLayer(embed_dim, nhead, dim_feedforward=embed_dim * 4)
-        self.encoder = nn.TransformerEncoder(encoder_layer, depth)
-        self.classifier = nn.Linear(embed_dim, num_classes)
+        img_size = cfg.dataset.input_size
+        patch_size = cfg.model.image_patch_size
+        num_patches = (img_size // patch_size) ** 2
+        embed_dim = cfg.model.hidden_size
+        self.patch_embed = PatchEmbed(3, embed_dim, patch_size)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim))
+        encoder_layer = nn.TransformerEncoderLayer(d_model=embed_dim, nhead=8, dropout=cfg.model.dropout)
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=cfg.model.num_layers)
+        self.norm = nn.LayerNorm(embed_dim)
+        self.head = nn.Linear(embed_dim, cfg.model.num_classes)
 
-    def forward(self, x):
-        x = self.patch_embed(x) + self.pos_emb
-        x = self.encoder(x.transpose(0, 1)).mean(dim=0)
-        return self.classifier(x)
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+    def forward(self, x):  # noqa: D401
+        B = x.size(0)
+        x = self.patch_embed(x)
+        cls_tokens = self.cls_token.expand(B, -1, -1)
+        x = torch.cat((cls_tokens, x), dim=1)
+        x = x + self.pos_embed
+        x = self.encoder(x)
+        x = self.norm(x[:, 0])
+        return self.head(x)
 
 
-# -----------------------------------------------------------------------------
-# Text CNN for "mobilenet_v2_text" baseline
-# -----------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------------
+
+def model_num_parameters(model: nn.Module) -> int:
+    return sum(p.numel() for p in model.parameters())
 
 
-class TextCNN(nn.Module):
-    def __init__(self, vocab_size: int, embed_dim: int, num_classes: int, kernel_sizes=(3, 4, 5), num_channels=100):
-        super().__init__()
-        self.embed = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
-        self.convs = nn.ModuleList(
-            [nn.Conv2d(1, num_channels, (k, embed_dim)) for k in kernel_sizes]
+def build_model(model_cfg: DictConfig) -> nn.Module:  # noqa: C901
+    name = model_cfg.name.lower()
+    if name == "mobilenetv2":
+        return MobileNetV2(
+            num_classes=model_cfg.num_classes,
+            width_mult=getattr(model_cfg, "width_multiplier", 1.0),
+            dropout=model_cfg.dropout,
         )
-        self.fc = nn.Linear(num_channels * len(kernel_sizes), num_classes)
-
-    def forward(self, x):
-        # x: [B, L]
-        x = self.embed(x)  # [B, L, D]
-        x = x.unsqueeze(1)  # [B, 1, L, D]
-        conv_outs = [F.relu(conv(x)).squeeze(3) for conv in self.convs]
-        pools = [F.max_pool1d(c, c.size(2)).squeeze(2) for c in conv_outs]
-        out = torch.cat(pools, 1)
-        return self.fc(out)
-
-
-# -----------------------------------------------------------------------------
-# Model builder entry
-# -----------------------------------------------------------------------------
-
-def build_model(cfg, num_classes: int):
-    if cfg.task == "image_classification":
-        if cfg.model.name.startswith("mobilenet_v2"):
-            return MobileNetV2(num_classes=num_classes, width_mult=cfg.model.width_multiplier)
-        elif cfg.model.name.startswith("distilbert") or cfg.model.name.endswith("patch"):
-            patch_size = getattr(cfg.model.patch_tokenizer, "patch_size", 4)
-            return ImageTransformerClassifier(
-                img_size=cfg.dataset.image_size,
-                patch_size=patch_size,
-                num_classes=num_classes,
-            )
-    elif cfg.task == "text_classification":
-        vocab_size = getattr(cfg.model.tokenizer, "vocab_size", 30000)
-        if cfg.model.name.startswith("mobilenet_v2_text"):
-            return TextCNN(vocab_size=vocab_size, embed_dim=cfg.model.embedding_dim, num_classes=num_classes)
+    if name == "distilbert":
+        # Distinguish between image and text variant using attribute presence
+        if hasattr(model_cfg, "image_patch_size"):
+            return ImageTransformer(model_cfg._get_root())
         else:
-            return TransformerClassifier(
-                vocab_size=vocab_size,
-                num_classes=num_classes,
-                seq_length=cfg.dataset.max_length,
-                dropout=getattr(cfg.model, "dropout", 0.1),
-            )
+            # Text DistilBERT fine-tuning using transformers
+            from transformers import DistilBertForSequenceClassification, DistilBertConfig  # type: ignore
 
-    raise ValueError(f"Unsupported model/task combination: {cfg.model.name} / {cfg.task}")
+            pretrained = getattr(model_cfg, "pretrained", None)
+            if pretrained and pretrained != "false":
+                model = DistilBertForSequenceClassification.from_pretrained(pretrained, num_labels=model_cfg.num_labels)
+            else:
+                config = DistilBertConfig(
+                    vocab_size=30522,  # default BERT vocab
+                    n_layers=model_cfg.num_layers,
+                    dim=model_cfg.hidden_size,
+                    n_heads=12,
+                    num_labels=model_cfg.num_labels,
+                    dropout=model_cfg.dropout,
+                )
+                model = DistilBertForSequenceClassification(config)
+            return model
+    if name == "mobilenetv2" and getattr(model_cfg, "architecture", "") == "charcnn":
+        raise ValueError("architecture field should change name use CharMobileNet")
+
+    if name == "charmobilenet":
+        return CharMobileNet(
+            vocab_size=model_cfg.vocab_size,
+            embedding_dim=model_cfg.embedding_dim,
+            seq_length=model_cfg.seq_length,
+            num_classes=model_cfg.num_classes,
+            dropout=model_cfg.dropout,
+        )
+
+    raise ValueError(f"Unsupported model name {model_cfg.name}")

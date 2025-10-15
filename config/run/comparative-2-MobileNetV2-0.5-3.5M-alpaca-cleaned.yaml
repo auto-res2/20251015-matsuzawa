@@ -1,0 +1,52 @@
+run_id: comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned
+method: comparative-2
+model:
+  name: MobileNetV2
+  variant: 0.5
+  architecture: charCNN   # MobileNet blocks re-purposed for 1-D character convolutions
+  embedding_dim: 16
+  seq_length: 512
+  num_parameters: 3.5e6
+  dropout: 0.3
+  num_classes: 2
+
+dataset:
+  name: alpaca-cleaned
+  path: /datasets/alpaca-cleaned
+  max_length: 512
+  tokenizer: char
+  split:
+    train: 0.9
+    val: 0.1
+
+training:
+  epochs: 5
+  batch_size: 32
+  optimizer:
+    name: adam
+    lr: 1e-3
+    weight_decay: 1e-4
+  lr_scheduler:
+    name: step
+    step_size: 2
+    gamma: 0.7
+  seed: 42
+  device: cpu
+
+optuna:
+  n_trials: 20
+  direction: maximize
+  search_space:
+    optimizer.lr:
+      type: loguniform
+      low: 1e-4
+      high: 1e-2
+    batch_size:
+      type: categorical
+      choices: [16, 32, 64]
+    model.dropout:
+      type: uniform
+      low: 0.1
+      high: 0.5
+
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
