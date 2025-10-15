@@ -68,12 +68,6 @@ Generate complete code for these files ONLY. Do not create any additional files 
 ## Code Validation Feedback
 
 
-**Previous Validation Issue**: 1. preprocess._alpaca_cleaned_dataloaders: fallback to synthetic data returns a plain dict that has no `.map`, `.column_names`, or `__getitem__` methods – execution will crash if the remote dataset cannot be downloaded (breaks Immediate Executability & Complete Data Pipeline).
-2. WandB integration is incomplete – no figure/artifact upload is implemented, violating the required WandB functionality.
-3. Optuna section present in configs but never used; hyper-parameter search is not implemented, so run configurations are not respected fully.
-The code therefore does not satisfy all mandatory requirements for immediate execution.
-**Action Required**: Address this issue in the implementation.
-
 
 
 # Experimental Environment
@@ -98,50 +92,66 @@ We compare lightweight model architectures (MobileNetV2-0.5 and DistilBERT-base)
   ```yaml
   run_id: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10
 method: comparative-2
-task: image_classification
 model:
-  name: mobilenet_v2
+  name: MobileNetV2
   width_multiplier: 0.5
-  pretrained: false
   num_parameters: 3.5e6
+  pretrained: imagenet
+  num_classes: 10
+  dropout: 0.2
 dataset:
   name: CIFAR-10
-  image_size: 32
-  augmentation:
-    random_crop: true
-    horizontal_flip: true
+  path: /datasets/cifar10
+  num_classes: 10
+  input_size: 32
+  channels: 3
   normalization:
     mean: [0.4914, 0.4822, 0.4465]
-    std:  [0.2470, 0.2435, 0.2616]
-  train_val_split: [0.9, 0.1]
-  batch_size: 128
+    std:  [0.2023, 0.1994, 0.2010]
+  augmentation:
+    random_crop:
+      size: 32
+      padding: 4
+    random_horizontal_flip:
+      p: 0.5
+  split:
+    train: 0.9
+    val: 0.1
 training:
-  optimizer: sgd
-  learning_rate: 0.01
-  momentum: 0.9
-  weight_decay: 1e-4
-  epochs: 100
+  epochs: 50
+  batch_size: 128
+  optimizer:
+    name: sgd
+    lr: 0.01
+    momentum: 0.9
+    weight_decay: 4e-5
   lr_scheduler:
-    name: cosine_annealing
-    T_max: 100
+    name: cosine
+    warmup_epochs: 5
   seed: 42
   device: cpu
-evaluation:
-  metrics: [accuracy, inference_time, model_size]
+  num_workers: 2
 optuna:
   n_trials: 25
+  direction: maximize
+  timeout: 14400   # seconds
   search_space:
-    learning_rate:
+    optimizer.lr:
       type: loguniform
       low: 1e-4
       high: 1e-1
     batch_size:
       type: categorical
-      choices: [32, 64, 128]
-    weight_decay:
+      choices: [64, 128, 256]
+    optimizer.weight_decay:
       type: loguniform
       low: 1e-6
       high: 1e-3
+    optimizer.momentum:
+      type: uniform
+      low: 0.8
+      high: 0.99
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
 
   ```
   
@@ -156,53 +166,56 @@ optuna:
   ```yaml
   run_id: comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned
 method: comparative-2
-task: text_classification
 model:
-  name: mobilenet_v2_text
-  width_multiplier: 0.5
-  pretrained: false
-  embedding_dim: 128
+  name: MobileNetV2
+  variant: 0.5
+  architecture: charCNN   # MobileNet blocks re-purposed for 1-D character convolutions
+  embedding_dim: 16
+  seq_length: 512
   num_parameters: 3.5e6
-  tokenizer:
-    type: wordpiece
-    vocab_size: 30000
+  dropout: 0.3
+  num_classes: 2
+
 dataset:
   name: alpaca-cleaned
-  max_length: 256
-  text_field: instruction
-  label_field: output
-  train_val_split: [0.9, 0.1]
-  batch_size: 64
+  path: /datasets/alpaca-cleaned
+  max_length: 512
+  tokenizer: char
+  split:
+    train: 0.9
+    val: 0.1
+
 training:
-  optimizer: adam
-  learning_rate: 5e-3
-  weight_decay: 0.0
-  epochs: 10
+  epochs: 5
+  batch_size: 32
+  optimizer:
+    name: adam
+    lr: 1e-3
+    weight_decay: 1e-4
   lr_scheduler:
-    name: linear
-    warmup_steps: 500
+    name: step
+    step_size: 2
+    gamma: 0.7
   seed: 42
   device: cpu
-evaluation:
-  metrics: [accuracy, f1_score, inference_time, model_size]
+
 optuna:
-  n_trials: 25
+  n_trials: 20
+  direction: maximize
   search_space:
-    learning_rate:
+    optimizer.lr:
       type: loguniform
       low: 1e-4
       high: 1e-2
     batch_size:
       type: categorical
       choices: [16, 32, 64]
-    embedding_dim:
-      type: int
-      low: 64
-      high: 256
-    weight_decay:
+    model.dropout:
       type: uniform
-      low: 0.0
-      high: 0.1
+      low: 0.1
+      high: 0.5
+
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
 
   ```
   
@@ -217,53 +230,66 @@ optuna:
   ```yaml
   run_id: comparative-2-DistilBERT-base-66M-CIFAR-10
 method: comparative-2
-task: image_classification
 model:
-  name: distilbert-base-patch
-  pretrained: false
-  num_parameters: 66e6
-  patch_tokenizer:
-    patch_size: 4
-    stride: 4
+  name: DistilBERT
+  pretrained: false        # trained from scratch on image tokens
+  hidden_size: 768
+  num_layers: 6
+  num_parameters: 6.6e7
+  image_patch_size: 4      # 4×4 pixel patches -> 64 tokens for 32×32 image
+  seq_length: 64
+  dropout: 0.1
+  num_classes: 10
+
 dataset:
   name: CIFAR-10
-  image_size: 32
+  path: /datasets/cifar10
+  num_classes: 10
+  input_size: 32
+  channels: 3
   normalization:
     mean: [0.4914, 0.4822, 0.4465]
-    std:  [0.2470, 0.2435, 0.2616]
-  train_val_split: [0.9, 0.1]
-  batch_size: 16
+    std:  [0.2023, 0.1994, 0.2010]
+  augmentation:
+    random_crop:
+      size: 32
+      padding: 4
+    random_horizontal_flip:
+      p: 0.5
+  split:
+    train: 0.9
+    val: 0.1
+
 training:
-  optimizer: adamw
-  learning_rate: 1e-4
-  weight_decay: 0.01
-  epochs: 20
+  epochs: 30
+  batch_size: 32
+  optimizer:
+    name: adamw
+    lr: 3e-4
+    weight_decay: 0.01
   lr_scheduler:
-    name: cosine_annealing
-    T_max: 20
-  gradient_checkpointing: true
+    name: linear_warmup
+    warmup_steps: 500
   seed: 42
   device: cpu
-evaluation:
-  metrics: [accuracy, inference_time, model_size]
+
 optuna:
-  n_trials: 20
+  n_trials: 25
+  direction: maximize
   search_space:
-    learning_rate:
+    optimizer.lr:
       type: loguniform
       low: 1e-5
       high: 1e-3
     batch_size:
       type: categorical
       choices: [8, 16, 32]
-    weight_decay:
-      type: uniform
-      low: 0.0
-      high: 0.1
-    patch_size:
+    model.image_patch_size:
       type: int
       low: 2
       high: 8
+
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
 
   ```
   
@@ -278,51 +304,52 @@ optuna:
   ```yaml
   run_id: comparative-2-DistilBERT-base-66M-alpaca-cleaned
 method: comparative-2
-task: text_classification
 model:
-  name: distilbert-base-uncased
-  pretrained: true
-  num_parameters: 66e6
-  fine_tune_layers: "all"
+  name: DistilBERT
+  pretrained: distilbert-base-uncased
+  num_parameters: 6.6e7
+  num_labels: 2
   dropout: 0.1
+
 dataset:
   name: alpaca-cleaned
-  max_length: 256
-  text_field: instruction
-  label_field: output
-  train_val_split: [0.9, 0.1]
-  batch_size: 8
+  path: /datasets/alpaca-cleaned
+  max_length: 512
+  tokenizer: bert-base-uncased
+  split:
+    train: 0.9
+    val: 0.1
+
 training:
-  optimizer: adamw
-  learning_rate: 5e-5
-  weight_decay: 0.01
   epochs: 3
+  batch_size: 16
+  optimizer:
+    name: adamw
+    lr: 5e-5
+    weight_decay: 0.01
   lr_scheduler:
-    name: linear
-    warmup_steps: 500
-  gradient_checkpointing: true
+    name: linear_warmup
+    warmup_steps: 300
   seed: 42
   device: cpu
-evaluation:
-  metrics: [accuracy, f1_score, inference_time, model_size]
+
 optuna:
   n_trials: 20
+  direction: maximize
   search_space:
-    learning_rate:
+    optimizer.lr:
       type: loguniform
-      low: 1e-6
+      low: 1e-5
       high: 1e-4
     batch_size:
       type: categorical
-      choices: [4, 8, 16]
-    weight_decay:
-      type: uniform
-      low: 0.0
-      high: 0.1
-    dropout:
+      choices: [8, 16, 32]
+    model.dropout:
       type: uniform
       low: 0.05
       high: 0.3
+
+evaluation_metrics: [accuracy, f1_score, inference_time, model_size]
 
   ```
   
@@ -378,11 +405,11 @@ wandb:
 Generate complete, production-ready experiment code that integrates with Hydra configuration system.
 Output:
 {
-    "train_py": "import json\nimport os\nimport random\nimport time\nfrom pathlib import Path\nfrom typing import Dict, Tuple, Any\n\nimport hydra\nimport numpy as np\nimport optuna\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\nimport torch.optim as optim\nfrom hydra.utils import to_absolute_path\nfrom omegaconf import OmegaConf\n\nfrom .model import build_model\nfrom .preprocess import build_dataloaders\n\n# -----------------------------------------------------------------------------\n# Helper utilities\n# -----------------------------------------------------------------------------\n\ndef set_seed(seed: int):\n    random.seed(seed)\n    np.random.seed(seed)\n    torch.manual_seed(seed)\n    torch.cuda.manual_seed_all(seed)\n\n\ndef count_parameters(model: nn.Module) -> int:\n    return sum(p.numel() for p in model.parameters())\n\n\nclass WandbLogger:\n    \"\"\"A thin wrapper that is a no-op when WandB is disabled.\"\"\"\n\n    def __init__(self, cfg):\n        self._enabled = cfg.wandb.mode != \"disabled\"\n        if self._enabled:\n            import wandb\n\n            self.run = wandb.init(\n                entity=cfg.wandb.entity,\n                project=cfg.wandb.project,\n                name=cfg.run_id,\n                config=OmegaConf.to_container(cfg, resolve=True),\n                mode=cfg.wandb.mode,\n            )\n            meta_path = Path(cfg.results_dir) / \"wandb_metadata.json\"\n            meta_path.parent.mkdir(parents=True, exist_ok=True)\n            with meta_path.open(\"w\") as fp:\n                json.dump(\n                    {\n                        \"wandb_entity\": cfg.wandb.entity,\n                        \"wandb_project\": cfg.wandb.project,\n                        \"wandb_run_id\": self.run.id,\n                    },\n                    fp,\n                )\n            print(f\"WandB run URL: {self.run.url}\")\n        else:\n            self.run = None\n\n    def log(self, *args, **kwargs):\n        if self._enabled:\n            import wandb\n\n            wandb.log(*args, **kwargs)\n\n    def upload_file(self, *args, **kwargs):\n        if self._enabled:\n            import wandb\n\n            wandb.save(*args, **kwargs)\n\n    def finish(self):\n        if self._enabled:\n            import wandb\n\n            wandb.finish()\n\n\n# -----------------------------------------------------------------------------\n# Training & Validation loops\n# -----------------------------------------------------------------------------\n\ndef train_one_epoch(\n    model: nn.Module,\n    loader: torch.utils.data.DataLoader,\n    optimizer: optim.Optimizer,\n    device: torch.device,\n    scheduler=None,\n) -> float:\n    model.train()\n    total_loss = 0.0\n    correct = 0\n    total = 0\n    start_time = time.time()\n    for batch in loader:\n        inputs, labels = batch[0].to(device), batch[1].to(device)\n        optimizer.zero_grad()\n        outputs = model(inputs)\n        loss = F.cross_entropy(outputs, labels)\n        loss.backward()\n        optimizer.step()\n        if scheduler is not None:\n            scheduler.step()\n        total_loss += loss.item() * labels.size(0)\n        _, pred = outputs.max(1)\n        correct += pred.eq(labels).sum().item()\n        total += labels.size(0)\n    elapsed = time.time() - start_time\n    return total_loss / total, correct / total, elapsed\n\n\ndef evaluate(\n    model: nn.Module,\n    loader: torch.utils.data.DataLoader,\n    device: torch.device,\n) -> Tuple[float, float, float]:\n    model.eval()\n    total_loss = 0.0\n    correct = 0\n    total = 0\n    start_time = time.time()\n    with torch.no_grad():\n        for batch in loader:\n            inputs, labels = batch[0].to(device), batch[1].to(device)\n            outputs = model(inputs)\n            loss = F.cross_entropy(outputs, labels)\n            total_loss += loss.item() * labels.size(0)\n            _, pred = outputs.max(1)\n            correct += pred.eq(labels).sum().item()\n            total += labels.size(0)\n    elapsed = time.time() - start_time\n    return total_loss / total, correct / total, elapsed / total  # per-sample time\n\n\n# -----------------------------------------------------------------------------\n# Objective for Optuna\n# -----------------------------------------------------------------------------\n\ndef optuna_objective(trial: optuna.Trial, cfg) -> float:\n    # Mutate hyper-parameters in cfg according to the search space\n    for hp_name, hp_conf in cfg.optuna.search_space.items():\n        if hp_conf.type == \"loguniform\":\n            val = trial.suggest_float(hp_name, hp_conf.low, hp_conf.high, log=True)\n        elif hp_conf.type == \"uniform\":\n            val = trial.suggest_float(hp_name, hp_conf.low, hp_conf.high)\n        elif hp_conf.type == \"int\":\n            val = trial.suggest_int(hp_name, hp_conf.low, hp_conf.high)\n        elif hp_conf.type == \"categorical\":\n            val = trial.suggest_categorical(hp_name, hp_conf.choices)\n        else:\n            raise ValueError(f\"Unknown search space type {hp_conf.type}\")\n        # hierarchical assignment (may be nested like training.learning_rate)\n        OmegaConf.update(cfg, hp_name, val, merge=False)\n\n    return run_single_training(cfg, trial=trial)\n\n\n# -----------------------------------------------------------------------------\n# Core training routine returning primary validation metric (higher is better)\n# -----------------------------------------------------------------------------\n\ndef run_single_training(cfg, trial=None) -> float:\n    device = torch.device(cfg.training.device)\n    set_seed(cfg.training.seed)\n\n    train_loader, val_loader, num_classes = build_dataloaders(cfg)\n    model = build_model(cfg, num_classes).to(device)\n\n    # ------------------------------------------------------------------\n    # Optimizer & Scheduler\n    # ------------------------------------------------------------------\n    if cfg.training.optimizer == \"sgd\":\n        optimizer = optim.SGD(\n            model.parameters(),\n            lr=cfg.training.learning_rate,\n            momentum=getattr(cfg.training, \"momentum\", 0.0),\n            weight_decay=cfg.training.weight_decay,\n        )\n    elif cfg.training.optimizer in {\"adam\", \"adamw\"}:\n        opt_class = optim.Adam if cfg.training.optimizer == \"adam\" else optim.AdamW\n        optimizer = opt_class(\n            model.parameters(),\n            lr=cfg.training.learning_rate,\n            weight_decay=cfg.training.weight_decay,\n        )\n    else:\n        raise ValueError(f\"Unsupported optimizer {cfg.training.optimizer}\")\n\n    # Simple scheduler support\n    if cfg.training.lr_scheduler.name == \"cosine_annealing\":\n        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.lr_scheduler.T_max)\n    elif cfg.training.lr_scheduler.name == \"linear\":\n        # Linear warm-up + decay (implemented via LambdaLR)\n        def lr_lambda(step):\n            warmup = cfg.training.lr_scheduler.warmup_steps\n            if step < warmup:\n                return float(step) / float(max(1, warmup))\n            return max(\n                0.0,\n                float(cfg.training.epochs * len(train_loader) - step)\n                / float(max(1, cfg.training.epochs * len(train_loader) - warmup)),\n            )\n\n        scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)\n    else:\n        scheduler = None\n\n    # ------------------------------------------------------------------\n    # Training loop\n    # ------------------------------------------------------------------\n    best_val_acc = 0.0\n    logger = WandbLogger(cfg)\n    history = []\n    epochs = 1 if cfg.trial_mode else cfg.training.epochs\n    for epoch in range(1, epochs + 1):\n        train_loss, train_acc, _ = train_one_epoch(model, train_loader, optimizer, device, scheduler)\n        val_loss, val_acc, val_inf_time = evaluate(model, val_loader, device)\n        history.append(\n            {\n                \"epoch\": epoch,\n                \"train_loss\": train_loss,\n                \"train_acc\": train_acc,\n                \"val_loss\": val_loss,\n                \"val_acc\": val_acc,\n                \"val_inference_time\": val_inf_time,\n            }\n        )\n        logger.log({**history[-1], \"epoch\": epoch})\n        if val_acc > best_val_acc:\n            best_val_acc = val_acc\n            # save checkpoint\n            ckp_path = Path(cfg.results_dir) / \"best_model.pt\"\n            torch.save(model.state_dict(), ckp_path)\n            logger.upload_file(str(ckp_path))\n\n        if trial is not None:\n            trial.report(val_acc, epoch)\n            if trial.should_prune():\n                raise optuna.TrialPruned()\n\n    logger.finish()\n\n    # Save results JSON -------------------------------------------------\n    results = {\n        \"run_id\": cfg.run_id,\n        \"best_val_accuracy\": best_val_acc,\n        \"epochs_ran\": epochs,\n        \"history\": history,\n        \"model_parameters\": count_parameters(model),\n    }\n    res_path = Path(cfg.results_dir) / \"results.json\"\n    res_path.parent.mkdir(parents=True, exist_ok=True)\n    with res_path.open(\"w\") as fp:\n        json.dump(results, fp, indent=2)\n\n    # Print experiment description + numerical data --------------------\n    print(\"#\" * 80)\n    print(\"Experiment description:\")\n    print(OmegaConf.to_yaml(cfg))\n    print(\"#\" * 80)\n    print(\"Experimental results:\")\n    print(json.dumps(results, indent=2))\n\n    return best_val_acc\n\n\n# -----------------------------------------------------------------------------\n# Entry point driven by Hydra\n# -----------------------------------------------------------------------------\n@hydra.main(config_path=\"../config\", config_name=\"config\")\ndef main(cfg) -> None:\n    cfg.results_dir = to_absolute_path(cfg.results_dir)\n    Path(cfg.results_dir).mkdir(parents=True, exist_ok=True)\n\n    # Adapt config for trial_mode ------------------------------------------------\n    if cfg.trial_mode:\n        cfg.training.epochs = 1\n        cfg.optuna.n_trials = 0\n\n    # -------------------------------------------------------------------------\n    # If Optuna is enabled, perform optimisation, else run once\n    # -------------------------------------------------------------------------\n    best_metric = None\n    if cfg.optuna.n_trials > 0 and not cfg.trial_mode:\n        study = optuna.create_study(direction=\"maximize\")\n        study.optimize(lambda trial: optuna_objective(trial, cfg.copy()), n_trials=cfg.optuna.n_trials)\n        best_metric = study.best_value\n        # Save study\n        study_path = Path(cfg.results_dir) / \"optuna_study.pkl\"\n        optuna.study.persist_study(study, study_path)\n    else:\n        best_metric = run_single_training(cfg)\n\n    # Done --------------------------------------------------------------------\n    print(json.dumps({\"run_id\": cfg.run_id, \"best_val_metric\": best_metric}))\n\n\nif __name__ == \"__main__\":\n    main()\n",
-    "evaluate_py": "import json\nimport os\nfrom pathlib import Path\nfrom typing import List, Dict\n\nimport hydra\nimport matplotlib.pyplot as plt\nfrom omegaconf import OmegaConf\n\n\nclass NoOpWandB:\n    def __init__(self):\n        self.enabled = False\n\n    def init(self, *args, **kwargs):\n        pass\n\n    def log(self, *args, **kwargs):\n        pass\n\n    def save(self, *args, **kwargs):\n        pass\n\n    def finish(self):\n        pass\n\n\ndef maybe_init_wandb(cfg):\n    if cfg.wandb.mode == \"disabled\":\n        return NoOpWandB()\n    import wandb\n\n    run = wandb.init(\n        project=cfg.wandb.project,\n        entity=cfg.wandb.entity,\n        name=f\"evaluation-{cfg.results_dir}\",\n        mode=cfg.wandb.mode,\n    )\n    run.enabled = True\n    return run\n\n\ndef read_results(dir_path: Path) -> Dict:\n    with (dir_path / \"results.json\").open() as fp:\n        return json.load(fp)\n\n\ndef aggregate_results(results_dirs: List[Path]):\n    records = [read_results(p) for p in results_dirs]\n    return records\n\n\ndef plot_accuracy(records: List[Dict], out_path: Path):\n    names = [r[\"run_id\"] for r in records]\n    accs = [r[\"best_val_accuracy\"] for r in records]\n    fig, ax = plt.subplots(figsize=(8, 4))\n    ax.bar(names, accs)\n    ax.set_ylabel(\"Validation Accuracy\")\n    ax.set_xticklabels(names, rotation=45, ha=\"right\")\n    fig.tight_layout()\n    fig.savefig(out_path)\n    plt.close(fig)\n\n\n@hydra.main(config_path=\"../config\", config_name=\"config\")\ndef main(cfg) -> None:\n    results_root = Path(cfg.results_dir)\n    sub_dirs = [p for p in results_root.iterdir() if p.is_dir()]\n    records = aggregate_results(sub_dirs)\n\n    # Print aggregated numbers --------------------------------------------------\n    summary = {r[\"run_id\"]: r[\"best_val_accuracy\"] for r in records}\n    print(json.dumps(summary, indent=2))\n\n    # Plot & (optionally) upload to WandB ---------------------------------------\n    fig_path = results_root / \"comparison.png\"\n    plot_accuracy(records, fig_path)\n\n    wb = maybe_init_wandb(cfg)\n    if getattr(wb, \"enabled\", False):\n        wb.log({\"validation_accuracy_comparison\": wandb.Image(str(fig_path))})  # type: ignore\n        wb.save(str(fig_path))  # type: ignore\n        wb.finish()  # type: ignore\n\n\nif __name__ == \"__main__\":\n    main()\n",
-    "preprocess_py": "import os\nimport random\nfrom pathlib import Path\nfrom typing import Tuple, List\n\nimport torch\nimport torchvision.transforms as T\nfrom torch.utils.data import DataLoader, Dataset\nfrom torchvision.datasets import CIFAR10\n\n\n# -----------------------------------------------------------------------------\n# Synthetic fallback datasets (used when remote download fails)\n# -----------------------------------------------------------------------------\n\n\nclass SyntheticImageDataset(Dataset):\n    def __init__(self, num_samples: int = 1000, num_classes: int = 10, image_size: int = 32):\n        self.num_samples = num_samples\n        self.num_classes = num_classes\n        self.image_size = image_size\n        self.data = torch.randn(num_samples, 3, image_size, image_size)\n        self.labels = torch.randint(0, num_classes, (num_samples,))\n\n    def __len__(self):\n        return self.num_samples\n\n    def __getitem__(self, idx):\n        return self.data[idx], self.labels[idx]\n\n\nclass SyntheticTextDataset(Dataset):\n    def __init__(\n        self,\n        num_samples: int = 1000,\n        seq_len: int = 32,\n        vocab_size: int = 5000,\n        num_classes: int = 2,\n    ):\n        self.num_samples = num_samples\n        self.seq_len = seq_len\n        self.vocab_size = vocab_size\n        self.num_classes = num_classes\n        self.data = torch.randint(1, vocab_size, (num_samples, seq_len))\n        self.labels = torch.randint(0, num_classes, (num_samples,))\n\n    def __len__(self):\n        return self.num_samples\n\n    def __getitem__(self, idx):\n        return self.data[idx], self.labels[idx]\n\n\n# -----------------------------------------------------------------------------\n# Text tokeniser & vocabulary builder (simple whitespace split)\n# -----------------------------------------------------------------------------\n\n\ndef build_vocab(corpus: List[str], max_size: int = 30000):\n    from collections import Counter\n\n    counter = Counter()\n    for line in corpus:\n        counter.update(line.split())\n    most_common = counter.most_common(max_size - 2)  # reserve PAD & UNK\n    vocab = {w: i + 2 for i, (w, _) in enumerate(most_common)}\n    vocab[\"<PAD>\"] = 0\n    vocab[\"<UNK>\"] = 1\n    return vocab\n\n\ndef encode_text(text: str, vocab: dict, max_length: int):\n    tokens = text.split()\n    ids = [vocab.get(t, vocab[\"<UNK>\"]) for t in tokens[:max_length]]\n    if len(ids) < max_length:\n        ids.extend([vocab[\"<PAD>\"]] * (max_length - len(ids)))\n    return torch.tensor(ids)\n\n\n# -----------------------------------------------------------------------------\n# Dataloader builder (public API used by train.py)\n# -----------------------------------------------------------------------------\n\n\ndef build_dataloaders(cfg) -> Tuple[DataLoader, DataLoader, int]:\n    if cfg.task == \"image_classification\":\n        return _build_image_dataloaders(cfg)\n    elif cfg.task == \"text_classification\":\n        return _build_text_dataloaders(cfg)\n    else:\n        raise ValueError(f\"Unknown task {cfg.task}\")\n\n\n# -----------------------------------------------------------------------------\n# Image pipeline\n# -----------------------------------------------------------------------------\n\ndef _image_transforms(cfg):\n    train_tf = []\n    if cfg.dataset.augmentation.random_crop:\n        train_tf.append(T.RandomCrop(cfg.dataset.image_size, padding=4))\n    if cfg.dataset.augmentation.horizontal_flip:\n        train_tf.append(T.RandomHorizontalFlip())\n    train_tf.append(T.ToTensor())\n    train_tf.append(T.Normalize(mean=cfg.dataset.normalization.mean, std=cfg.dataset.normalization.std))\n\n    val_tf = T.Compose(\n        [T.ToTensor(), T.Normalize(mean=cfg.dataset.normalization.mean, std=cfg.dataset.normalization.std)]\n    )\n    return T.Compose(train_tf), val_tf\n\n\ndef _build_image_dataloaders(cfg):\n    # Attempt to fetch CIFAR-10; fallback to synthetic\n    train_tf, val_tf = _image_transforms(cfg)\n    num_classes = 10\n    try:\n        train_set_full = CIFAR10(\n            root=Path(\"~/.cache/datasets\").expanduser(),\n            train=True,\n            transform=train_tf,\n            download=True,\n        )\n        val_set_full = CIFAR10(\n            root=Path(\"~/.cache/datasets\").expanduser(),\n            train=True,\n            transform=val_tf,\n            download=True,\n        )\n        # Manual split\n        total_size = len(train_set_full)\n        split_point = int(total_size * cfg.dataset.train_val_split[0])\n        idx = torch.randperm(total_size)\n        train_idx, val_idx = idx[:split_point], idx[split_point:]\n        train_set = torch.utils.data.Subset(train_set_full, train_idx)\n        val_set = torch.utils.data.Subset(val_set_full, val_idx)\n    except Exception as e:\n        print(f\"Dataset download failed ({e}); using synthetic CIFAR-10 data.\")\n        train_set = SyntheticImageDataset(5000, num_classes, cfg.dataset.image_size)\n        val_set = SyntheticImageDataset(1000, num_classes, cfg.dataset.image_size)\n\n    train_loader = DataLoader(\n        train_set,\n        batch_size=cfg.dataset.batch_size,\n        shuffle=True,\n        num_workers=2,\n        pin_memory=False,\n    )\n    val_loader = DataLoader(\n        val_set,\n        batch_size=cfg.dataset.batch_size,\n        shuffle=False,\n        num_workers=2,\n        pin_memory=False,\n    )\n    return train_loader, val_loader, num_classes\n\n\n# -----------------------------------------------------------------------------\n# Text pipeline\n# -----------------------------------------------------------------------------\n\n# For the sake of resource limitation, we only implement synthetic fallback.\n\n\ndef _build_text_dataloaders(cfg):\n    # Attempt to load dataset from TSV or JSONL if available locally.\n    root_path = Path(\"datasets\") / cfg.dataset.name\n    text_samples = []\n    label_samples = []\n    if root_path.exists():\n        for line in root_path.open():\n            try:\n                record = json.loads(line)\n                text_samples.append(record[cfg.dataset.text_field])\n                label_samples.append(record[cfg.dataset.label_field])\n            except Exception:\n                continue\n    else:\n        print(\"Text dataset not found locally; using synthetic data.\")\n        num_classes = 2\n        seq_len = cfg.dataset.max_length\n        train_set = SyntheticTextDataset(2000, seq_len, 5000, num_classes)\n        val_set = SyntheticTextDataset(500, seq_len, 5000, num_classes)\n        train_loader = DataLoader(train_set, batch_size=cfg.dataset.batch_size, shuffle=True)\n        val_loader = DataLoader(val_set, batch_size=cfg.dataset.batch_size, shuffle=False)\n        return train_loader, val_loader, num_classes\n\n    # Build vocabulary\n    vocab = build_vocab(text_samples, max_size=cfg.model.tokenizer.vocab_size)\n    num_classes = len(set(label_samples))\n\n    class TextDataset(Dataset):\n        def __init__(self, texts, labels):\n            self.enc = [encode_text(t, vocab, cfg.dataset.max_length) for t in texts]\n            self.labels = torch.tensor(labels, dtype=torch.long)\n\n        def __len__(self):\n            return len(self.labels)\n\n        def __getitem__(self, idx):\n            return self.enc[idx], self.labels[idx]\n\n    total_size = len(text_samples)\n    idx = list(range(total_size))\n    random.shuffle(idx)\n    split_point = int(total_size * cfg.dataset.train_val_split[0])\n    train_idx, val_idx = idx[:split_point], idx[split_point:]\n    train_texts = [text_samples[i] for i in train_idx]\n    val_texts = [text_samples[i] for i in val_idx]\n    train_labels = [label_samples[i] for i in train_idx]\n    val_labels = [label_samples[i] for i in val_idx]\n\n    train_set = TextDataset(train_texts, train_labels)\n    val_set = TextDataset(val_texts, val_labels)\n    train_loader = DataLoader(train_set, batch_size=cfg.dataset.batch_size, shuffle=True)\n    val_loader = DataLoader(val_set, batch_size=cfg.dataset.batch_size, shuffle=False)\n    return train_loader, val_loader, num_classes\n",
-    "model_py": "import math\nfrom typing import Optional\n\nimport torch\nimport torch.nn as nn\nimport torch.nn.functional as F\n\n# -----------------------------------------------------------------------------\n# Helper blocks for MobileNetV2\n# -----------------------------------------------------------------------------\n\ndef _make_divisible(v, divisor=8, min_value=None):\n    if min_value is None:\n        min_value = divisor\n    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)\n    if new_v < 0.9 * v:\n        new_v += divisor\n    return new_v\n\n\nclass InvertedResidual(nn.Module):\n    def __init__(self, inp, oup, stride, expand_ratio):\n        super().__init__()\n        hidden_dim = int(round(inp * expand_ratio))\n        self.identity = stride == 1 and inp == oup\n        layers = []\n        if expand_ratio != 1:\n            layers.append(nn.Conv2d(inp, hidden_dim, 1, 1, 0, bias=False))\n            layers.append(nn.BatchNorm2d(hidden_dim))\n            layers.append(nn.ReLU6(inplace=True))\n        layers.extend(\n            [\n                nn.Conv2d(hidden_dim, hidden_dim, 3, stride, 1, groups=hidden_dim, bias=False),\n                nn.BatchNorm2d(hidden_dim),\n                nn.ReLU6(inplace=True),\n                nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False),\n                nn.BatchNorm2d(oup),\n            ]\n        )\n        self.conv = nn.Sequential(*layers)\n\n    def forward(self, x):\n        if self.identity:\n            return x + self.conv(x)\n        else:\n            return self.conv(x)\n\n\nclass MobileNetV2(nn.Module):\n    def __init__(self, num_classes: int = 10, width_mult: float = 1.0):\n        super().__init__()\n        block = InvertedResidual\n        input_channel = 32\n        last_channel = 1280\n\n        interverted_residual_setting = [\n            # t, c, n, s\n            [1, 16, 1, 1],\n            [6, 24, 2, 2],\n            [6, 32, 3, 2],\n            [6, 64, 4, 2],\n            [6, 96, 3, 1],\n            [6, 160, 3, 2],\n            [6, 320, 1, 1],\n        ]\n\n        # building first layer\n        input_channel = _make_divisible(input_channel * width_mult, 4)\n        self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), 4)\n        features = [\n            nn.Conv2d(3, input_channel, 3, stride=2, padding=1, bias=False),\n            nn.BatchNorm2d(input_channel),\n            nn.ReLU6(inplace=True),\n        ]\n        # building inverted residual blocks\n        for t, c, n, s in interverted_residual_setting:\n            output_channel = _make_divisible(c * width_mult, 4)\n            for i in range(n):\n                stride = s if i == 0 else 1\n                features.append(block(input_channel, output_channel, stride, expand_ratio=t))\n                input_channel = output_channel\n        # building last several layers\n        features.append(nn.Conv2d(input_channel, self.last_channel, 1, 1, 0, bias=False))\n        features.append(nn.BatchNorm2d(self.last_channel))\n        features.append(nn.ReLU6(inplace=True))\n        self.features = nn.Sequential(*features)\n\n        # building classifier\n        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))\n        self.classifier = nn.Linear(self.last_channel, num_classes)\n\n        # weight initialization\n        for m in self.modules():\n            if isinstance(m, nn.Conv2d):\n                nn.init.kaiming_normal_(m.weight, mode=\"fan_out\")\n            elif isinstance(m, nn.BatchNorm2d):\n                nn.init.ones_(m.weight)\n                nn.init.zeros_(m.bias)\n            elif isinstance(m, nn.Linear):\n                nn.init.normal_(m.weight, 0, 0.01)\n                nn.init.zeros_(m.bias)\n\n    def forward(self, x):\n        x = self.features(x)\n        x = self.avgpool(x).flatten(1)\n        x = self.classifier(x)\n        return x\n\n\n# -----------------------------------------------------------------------------\n# Very small Transformer encoder used for Distil-style models (image & text)\n# -----------------------------------------------------------------------------\n\nclass TransformerClassifier(nn.Module):\n    def __init__(\n        self,\n        vocab_size: int,\n        num_classes: int,\n        seq_length: int,\n        d_model: int = 128,\n        nhead: int = 4,\n        num_layers: int = 2,\n        dropout: float = 0.1,\n        sap: bool = False,  # Spatial average pooling flag for images\n    ):\n        super().__init__()\n        self.sap = sap\n        self.token_emb = nn.Embedding(vocab_size, d_model)\n        self.pos_emb = nn.Parameter(torch.zeros(1, seq_length, d_model))\n        encoder_layer = nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward=d_model * 4, dropout=dropout)\n        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers)\n        self.classifier = nn.Linear(d_model, num_classes)\n\n    def forward(self, x):\n        # x: [B, seq_len] (text) or [B, seq_len, d]\n        if x.dim() == 3 and self.sap:\n            b, t, d = x.shape\n            x = x\n        else:\n            x = self.token_emb(x) + self.pos_emb[:, : x.size(1)]\n        x = self.encoder(x.transpose(0, 1)).mean(dim=0)\n        return self.classifier(x)\n\n\nclass PatchEmbed(nn.Module):\n    def __init__(self, img_size=32, patch_size=4, in_chans=3, embed_dim=128):\n        super().__init__()\n        self.img_size = img_size\n        self.patch_size = patch_size\n        self.num_patches = (img_size // patch_size) ** 2\n        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)\n\n    def forward(self, x):\n        x = self.proj(x)  # B, C, H/P, W/P\n        x = x.flatten(2).transpose(1, 2)  # B, num_patches, embed_dim\n        return x\n\n\nclass ImageTransformerClassifier(nn.Module):\n    def __init__(\n        self,\n        img_size: int,\n        patch_size: int,\n        num_classes: int,\n        embed_dim: int = 128,\n        depth: int = 4,\n        nhead: int = 4,\n    ):\n        super().__init__()\n        self.patch_embed = PatchEmbed(img_size, patch_size, 3, embed_dim)\n        self.pos_emb = nn.Parameter(torch.zeros(1, (img_size // patch_size) ** 2, embed_dim))\n        encoder_layer = nn.TransformerEncoderLayer(embed_dim, nhead, dim_feedforward=embed_dim * 4)\n        self.encoder = nn.TransformerEncoder(encoder_layer, depth)\n        self.classifier = nn.Linear(embed_dim, num_classes)\n\n    def forward(self, x):\n        x = self.patch_embed(x) + self.pos_emb\n        x = self.encoder(x.transpose(0, 1)).mean(dim=0)\n        return self.classifier(x)\n\n\n# -----------------------------------------------------------------------------\n# Text CNN for \"mobilenet_v2_text\" baseline\n# -----------------------------------------------------------------------------\n\n\nclass TextCNN(nn.Module):\n    def __init__(self, vocab_size: int, embed_dim: int, num_classes: int, kernel_sizes=(3, 4, 5), num_channels=100):\n        super().__init__()\n        self.embed = nn.Embedding(vocab_size, embed_dim, padding_idx=0)\n        self.convs = nn.ModuleList(\n            [nn.Conv2d(1, num_channels, (k, embed_dim)) for k in kernel_sizes]\n        )\n        self.fc = nn.Linear(num_channels * len(kernel_sizes), num_classes)\n\n    def forward(self, x):\n        # x: [B, L]\n        x = self.embed(x)  # [B, L, D]\n        x = x.unsqueeze(1)  # [B, 1, L, D]\n        conv_outs = [F.relu(conv(x)).squeeze(3) for conv in self.convs]\n        pools = [F.max_pool1d(c, c.size(2)).squeeze(2) for c in conv_outs]\n        out = torch.cat(pools, 1)\n        return self.fc(out)\n\n\n# -----------------------------------------------------------------------------\n# Model builder entry\n# -----------------------------------------------------------------------------\n\ndef build_model(cfg, num_classes: int):\n    if cfg.task == \"image_classification\":\n        if cfg.model.name.startswith(\"mobilenet_v2\"):\n            return MobileNetV2(num_classes=num_classes, width_mult=cfg.model.width_multiplier)\n        elif cfg.model.name.startswith(\"distilbert\") or cfg.model.name.endswith(\"patch\"):\n            patch_size = getattr(cfg.model.patch_tokenizer, \"patch_size\", 4)\n            return ImageTransformerClassifier(\n                img_size=cfg.dataset.image_size,\n                patch_size=patch_size,\n                num_classes=num_classes,\n            )\n    elif cfg.task == \"text_classification\":\n        vocab_size = getattr(cfg.model.tokenizer, \"vocab_size\", 30000)\n        if cfg.model.name.startswith(\"mobilenet_v2_text\"):\n            return TextCNN(vocab_size=vocab_size, embed_dim=cfg.model.embedding_dim, num_classes=num_classes)\n        else:\n            return TransformerClassifier(\n                vocab_size=vocab_size,\n                num_classes=num_classes,\n                seq_length=cfg.dataset.max_length,\n                dropout=getattr(cfg.model, \"dropout\", 0.1),\n            )\n\n    raise ValueError(f\"Unsupported model/task combination: {cfg.model.name} / {cfg.task}\")\n",
-    "main_py": "import json\nimport subprocess\nimport sys\nfrom pathlib import Path\nfrom typing import List\n\nimport hydra\nfrom hydra.utils import to_absolute_path\nfrom omegaconf import OmegaConf, DictConfig\n\n\n@hydra.main(config_path=\"../config\", config_name=\"config\")\ndef main(cfg: DictConfig):\n    results_root = Path(to_absolute_path(cfg.results_dir))\n    results_root.mkdir(parents=True, exist_ok=True)\n\n    def _run_single(run_id: str):\n        run_results_dir = results_root / run_id\n        cmd = [\n            sys.executable,\n            \"-u\",\n            \"-m\",\n            \"src.train\",\n            f\"run={run_id}\",\n            f\"results_dir={run_results_dir}\",\n            f\"trial_mode={cfg.trial_mode}\",\n            f\"wandb.mode={cfg.wandb.mode}\",\n        ]\n        print(\"Executing: \", \" \".join(map(str, cmd)))\n        subprocess.run(cmd, check=True)\n\n    # Determine which runs to execute------------------------------------------------\n    run_list: List[str]\n    if cfg.run == \"all\":\n        run_list = cfg.run_list\n    else:\n        run_list = [cfg.run]\n    for r in run_list:\n        _run_single(r)\n\n    # After all runs, trigger evaluation ------------------------------------------------\n    cmd_eval = [\n        sys.executable,\n        \"-u\",\n        \"-m\",\n        \"src.evaluate\",\n        f\"results_dir={results_root}\",\n        f\"wandb.mode={cfg.wandb.mode}\",\n    ]\n    print(\"Executing evaluation: \", \" \".join(map(str, cmd_eval)))\n    subprocess.run(cmd_eval, check=True)\n\n\nif __name__ == \"__main__\":\n    main()\n",
-    "pyproject_toml": "[build-system]\nrequires = [\"setuptools>=42\", \"wheel\"]\n\n[project]\nname = \"research-experiment\"\nversion = \"0.1.0\"\ndependencies = [\n    \"torch>=2.0.0\",\n    \"torchvision>=0.15.0\",\n    \"hydra-core>=1.3.2\",\n    \"optuna>=3.4.0\",\n    \"wandb>=0.15.0\",\n    \"matplotlib>=3.8.0\",\n    \"pyyaml>=6.0\",\n]\n",
-    "config_yaml": "# Main Hydra configuration file\n# List all run IDs available under config/run\n\nrun_list:\n  - comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10\n  - comparative-2-MobileNetV2-0.5-3.5M-alpaca-cleaned\n  - comparative-2-DistilBERT-base-66M-CIFAR-10\n  - comparative-2-DistilBERT-base-66M-alpaca-cleaned\n\n# Default arguments\nrun: all  # can be overridden by CLI\nresults_dir: results\ntrial_mode: false\n\nwandb:\n  entity: gengaru617\n  project: 251015-test\n  mode: online  # can be overridden to \"disabled\" for CI\n"
+    "train_py": "import json\nimport os\nimport random\nimport time\nfrom pathlib import Path\nfrom typing import Any, Dict, Tuple\n\nimport hydra\nimport numpy as np\nimport optuna\nimport torch\nimport torch.nn as nn\nfrom hydra.utils import to_absolute_path\nfrom omegaconf import DictConfig, OmegaConf\nfrom sklearn.metrics import accuracy_score, f1_score\n\nfrom . import model as model_lib  # noqa: F401\nfrom . import preprocess as preprocess_lib  # noqa: F401\n\ntry:\n    import wandb  # type: ignore\nexcept ImportError:  # pragma: no cover\n    wandb = None  # type: ignore\n\n\n# -----------------------------------------------------------------------------\n# Utility helpers\n# -----------------------------------------------------------------------------\n\ndef set_seed(seed: int) -> None:\n    random.seed(seed)\n    np.random.seed(seed)\n    torch.manual_seed(seed)\n    torch.cuda.manual_seed_all(seed)\n    torch.backends.cudnn.deterministic = True\n    torch.backends.cudnn.benchmark = False\n\n\ndef create_optimizer(params, cfg):\n    name = cfg.name.lower()\n    if name == \"sgd\":\n        return torch.optim.SGD(params, lr=cfg.lr, momentum=cfg.momentum, weight_decay=cfg.weight_decay)\n    if name == \"adam\":\n        return torch.optim.Adam(params, lr=cfg.lr, weight_decay=cfg.weight_decay)\n    if name == \"adamw\":\n        return torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)\n    raise ValueError(f\"Unsupported optimizer {cfg.name}\")\n\n\ndef create_scheduler(optimizer, cfg, total_steps: int):\n    name = cfg.name.lower()\n    if name == \"cosine\":\n        return torch.optim.lr_scheduler.CosineAnnealingLR(\n            optimizer, T_max=total_steps, eta_min=1e-6\n        )\n    if name == \"step\":\n        return torch.optim.lr_scheduler.StepLR(\n            optimizer, step_size=cfg.step_size, gamma=cfg.gamma\n        )\n    if name == \"linear_warmup\":\n        from torch.optim.lr_scheduler import LambdaLR\n\n        def lr_lambda(step):\n            if step < cfg.warmup_steps:\n                return float(step) / float(max(1, cfg.warmup_steps))\n            return max(\n                0.0, float(total_steps - step) / float(max(1, total_steps - cfg.warmup_steps))\n            )\n\n        return LambdaLR(optimizer, lr_lambda)\n    return None\n\n\ndef evaluate(model: nn.Module, loader, device, criterion):\n    model.eval()\n    y_true, y_pred = [], []\n    val_loss = 0.0\n    start_time = time.perf_counter()\n    with torch.no_grad():\n        for batch in loader:\n            inputs, targets = batch\n            inputs = inputs.to(device)\n            targets = targets.to(device)\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            val_loss += loss.item() * targets.size(0)\n            preds = outputs.argmax(dim=1).cpu().numpy()\n            y_pred.append(preds)\n            y_true.append(targets.cpu().numpy())\n    elapsed = time.perf_counter() - start_time\n    y_true = np.concatenate(y_true)\n    y_pred = np.concatenate(y_pred)\n    acc = accuracy_score(y_true, y_pred)\n    f1 = f1_score(y_true, y_pred, average=\"macro\")\n    avg_loss = val_loss / len(loader.dataset)\n    inference_time = elapsed / len(loader.dataset)\n    return {\n        \"val_loss\": avg_loss,\n        \"accuracy\": acc,\n        \"f1_score\": f1,\n        \"inference_time\": inference_time,\n    }\n\n\n# -----------------------------------------------------------------------------\n# Core training logic (single trial)\n# -----------------------------------------------------------------------------\n\ndef run_single_experiment(cfg: DictConfig, trial: optuna.Trial = None) -> Dict[str, Any]:\n    device = torch.device(cfg.training.device)\n    set_seed(cfg.training.seed)\n\n    # Data --------------------------------------------------------------------\n    train_loader, val_loader = preprocess_lib.get_dataloaders(\n        cfg.dataset, cfg.training, cfg.trial_mode  # type: ignore\n    )\n\n    # Model -------------------------------------------------------------------\n    model = model_lib.get_model(cfg.model, cfg.dataset).to(device)\n    criterion = nn.CrossEntropyLoss()\n\n    # Count parameters / model size (bytes)\n    n_params = sum(p.numel() for p in model.parameters())\n    model_size = n_params * 4 / 1e6  # MB (float32)\n\n    # Optimizer / Scheduler ----------------------------------------------------\n    optimizer = create_optimizer(model.parameters(), cfg.training.optimizer)\n    total_steps = cfg.training.epochs * len(train_loader)\n    scheduler = create_scheduler(optimizer, cfg.training.lr_scheduler, total_steps)\n\n    # WandB --------------------------------------------------------------------\n    if cfg.wandb.mode != \"disabled\" and wandb is not None:\n        wandb_run = wandb.init(\n            entity=cfg.wandb.entity,\n            project=cfg.wandb.project,\n            config=OmegaConf.to_container(cfg, resolve=True),\n            reinit=True,\n            mode=cfg.wandb.mode,\n        )\n        # Save metadata file ---------------------------------------------------\n        meta_path = Path(to_absolute_path(cfg.results_dir)) / cfg.run_id / \"wandb_metadata.json\"\n        meta_path.parent.mkdir(parents=True, exist_ok=True)\n        with meta_path.open(\"w\") as f:\n            json.dump(\n                {\n                    \"wandb_entity\": cfg.wandb.entity,\n                    \"wandb_project\": cfg.wandb.project,\n                    \"wandb_run_id\": wandb_run.id,\n                },\n                f,\n                indent=2,\n            )\n    else:\n        wandb_run = None  # type: ignore\n\n    # Training loop -----------------------------------------------------------\n    best_val_acc = 0.0\n    history = []\n    for epoch in range(1, cfg.training.epochs + 1):\n        model.train()\n        epoch_loss = 0.0\n        correct = 0\n        total = 0\n        for batch in train_loader:\n            inputs, targets = batch\n            inputs = inputs.to(device)\n            targets = targets.to(device)\n            optimizer.zero_grad()\n            outputs = model(inputs)\n            loss = criterion(outputs, targets)\n            loss.backward()\n            optimizer.step()\n            if scheduler is not None:\n                scheduler.step()\n            epoch_loss += loss.item() * targets.size(0)\n            preds = outputs.argmax(dim=1)\n            correct += (preds == targets).sum().item()\n            total += targets.size(0)\n        avg_train_loss = epoch_loss / total\n        train_acc = correct / total\n        # Validation ----------------------------------------------------------\n        val_metrics = evaluate(model, val_loader, device, criterion)\n        val_acc = val_metrics[\"accuracy\"]\n        best_val_acc = max(best_val_acc, val_acc)\n        epoch_record = {\n            \"epoch\": epoch,\n            \"train_loss\": avg_train_loss,\n            \"train_accuracy\": train_acc,\n            **val_metrics,\n        }\n        history.append(epoch_record)\n        if wandb_run is not None:\n            wandb.log(epoch_record)\n        # Optuna pruning ------------------------------------------------------\n        if trial is not None:\n            trial.report(val_acc, epoch)\n            if trial.should_prune():\n                raise optuna.TrialPruned()\n\n    final_metrics = history[-1]\n    final_metrics.update(\n        {\n            \"best_val_accuracy\": best_val_acc,\n            \"model_size_mb\": model_size,\n            \"n_parameters\": n_params,\n        }\n    )\n    if wandb_run is not None:\n        artifact_path = Path(to_absolute_path(cfg.results_dir)) / cfg.run_id / \"model.pth\"\n        artifact_path.parent.mkdir(parents=True, exist_ok=True)\n        torch.save(model.state_dict(), artifact_path)\n        wandb.save(str(artifact_path))\n        wandb_run.finish()\n\n    return {\"history\": history, \"final\": final_metrics}\n\n\n# -----------------------------------------------------------------------------\n# Optuna objective wrapper ----------------------------------------------------\n# -----------------------------------------------------------------------------\n\ndef optuna_objective(trial: optuna.Trial, cfg: DictConfig):\n    # Suggest hyper-parameters according to search space ----------------------\n    def _suggest(node: DictConfig, prefix: str = \"\"):\n        for k, v in node.items():\n            key = f\"{prefix}{k}\" if prefix == \"\" else f\"{prefix}.{k}\"\n            if isinstance(v, DictConfig) and \"type\" in v:\n                if v.type == \"loguniform\":\n                    val = trial.suggest_float(key, v.low, v.high, log=True)\n                elif v.type == \"uniform\":\n                    val = trial.suggest_float(key, v.low, v.high)\n                elif v.type == \"categorical\":\n                    val = trial.suggest_categorical(key, v.choices)\n                elif v.type == \"int\":\n                    val = trial.suggest_int(key, v.low, v.high)\n                else:\n                    raise ValueError(f\"Unknown optuna type {v.type}\")\n                # Set value in cfg ------------------------------------------------\n                OmegaConf.update(cfg, key, val, merge=False)\n            elif isinstance(v, DictConfig):\n                _suggest(v, key)\n\n    _suggest(cfg.optuna.search_space)\n    # Run experiment ---------------------------------------------------------\n    results = run_single_experiment(cfg, trial)\n    return results[\"final\"][\"best_val_accuracy\"]\n\n\n# -----------------------------------------------------------------------------\n# Hydra main ------------------------------------------------------------------\n# -----------------------------------------------------------------------------\n\n\n@hydra.main(version_base=None, config_path=\"../config\", config_name=\"config\")\ndef _main(cfg: DictConfig) -> None:\n    \"\"\"Entrypoint for training a single experiment variation.\"\"\"\n    # ---------------------------------------------------------------------\n    # Handle trial mode ----------------------------------------------------\n    if cfg.trial_mode:\n        cfg.training.epochs = 1\n        cfg.optuna.n_trials = 0\n\n    # Create results directory --------------------------------------------\n    results_root = Path(to_absolute_path(cfg.results_dir)) / cfg.run_id\n    results_root.mkdir(parents=True, exist_ok=True)\n    # Save effective config ------------------------------------------------\n    with (results_root / \"config.yaml\").open(\"w\") as f:\n        OmegaConf.save(config=cfg, f=f.name)\n\n    # Experiment description ----------------------------------------------\n    print(\n        f\"[Experiment Description] Run ID: {cfg.run_id}\\n\"\n        f\"Method: {cfg.method} | Model: {cfg.model.name} | Dataset: {cfg.dataset.name}\\n\"\n        f\"Training epochs: {cfg.training.epochs} | Batch size: {cfg.training.batch_size}\\n\"\n    )\n\n    # Run with / without Optuna -------------------------------------------\n    if cfg.optuna.n_trials > 0:\n        study = optuna.create_study(direction=cfg.optuna.direction)\n        study.optimize(lambda trial: optuna_objective(trial, cfg), n_trials=cfg.optuna.n_trials)\n        best_params = study.best_params\n        best_value = study.best_value\n        with (results_root / \"optuna_best.json\").open(\"w\") as f:\n            json.dump({\"best_params\": best_params, \"best_value\": best_value}, f, indent=2)\n        # Re-run final training with best hyperparameters ------------------\n        for k, v in best_params.items():\n            OmegaConf.update(cfg, k, v, merge=False)\n\n    # Final run ------------------------------------------------------------\n    outcome = run_single_experiment(cfg)\n    with (results_root / \"results.json\").open(\"w\") as f:\n        json.dump(outcome, f, indent=2)\n\n    # Print JSON-formatted experimental data ------------------------------\n    print(json.dumps({\"run_id\": cfg.run_id, **outcome[\"final\"]}, indent=2))\n\n\nif __name__ == \"__main__\":\n    _main()\n",
+    "evaluate_py": "import json\nimport sys\nfrom pathlib import Path\nfrom typing import Dict, List\n\nimport hydra\nimport matplotlib.pyplot as plt\nimport numpy as np\nfrom omegaconf import DictConfig\n\ntry:\n    import wandb  # type: ignore\nexcept ImportError:  # pragma: no cover\n    wandb = None  # type: ignore\n\n\n@hydra.main(version_base=None, config_path=\"../config\", config_name=\"config\")\ndef _main(cfg: DictConfig) -> None:\n    results_root = Path(hydra.utils.to_absolute_path(cfg.results_dir))\n    if not results_root.exists():\n        print(\"No results directory found.\")\n        sys.exit(0)\n\n    result_files = list(results_root.glob(\"*/results.json\"))\n    if not result_files:\n        print(\"No result files found.\")\n        sys.exit(0)\n\n    records: List[Dict] = []\n    for file in result_files:\n        with file.open() as f:\n            data = json.load(f)\n        run_id = file.parent.name\n        records.append({\"run_id\": run_id, **data[\"final\"]})\n\n    # Prepare comparison figure ----------------------------------------------\n    run_ids = [r[\"run_id\"] for r in records]\n    accuracies = [r[\"best_val_accuracy\"] for r in records]\n\n    fig, ax = plt.subplots(figsize=(10, 4))\n    ax.bar(run_ids, accuracies, color=\"skyblue\")\n    ax.set_ylabel(\"Best Val Accuracy\")\n    ax.set_title(\"Experiment Comparison\")\n    ax.set_xticklabels(run_ids, rotation=45, ha=\"right\", fontsize=8)\n    fig.tight_layout()\n\n    fig_path = results_root / \"comparison.png\"\n    fig.savefig(fig_path)\n\n    comparison_summary = {\n        \"runs\": records,\n        \"best_run\": run_ids[int(np.argmax(accuracies))],\n        \"best_accuracy\": max(accuracies),\n    }\n\n    # WandB upload ------------------------------------------------------------\n    if cfg.wandb.mode != \"disabled\" and wandb is not None:\n        run = wandb.init(\n            entity=cfg.wandb.entity,\n            project=cfg.wandb.project,\n            name=\"evaluation\",\n            mode=cfg.wandb.mode,\n            reinit=True,\n        )\n        wandb.log({\"comparison\": wandb.Image(str(fig_path))})\n        run.finish()\n\n    print(json.dumps(comparison_summary, indent=2))\n\n\nif __name__ == \"__main__\":\n    _main()\n",
+    "preprocess_py": "import json\nimport os\nfrom pathlib import Path\nfrom typing import Tuple\n\nimport numpy as np\nimport torch\nimport torchvision.transforms as T\nfrom omegaconf import DictConfig\nfrom torch.utils.data import DataLoader, Dataset, random_split\nfrom torchvision.datasets import CIFAR10\n\ntry:\n    from transformers import BertTokenizer  # type: ignore\nexcept ImportError:  # pragma: no cover\n    BertTokenizer = None  # type: ignore\n\n\nclass CharacterDataset(Dataset):\n    \"\"\"Simple character-level text classification dataset.\"\"\"\n\n    def __init__(self, file_path: Path, max_length: int, vocab: str, label_key: str = \"label\", text_key: str = \"text\"):\n        self.samples = []\n        self.vocab = vocab\n        self.char2idx = {c: i + 1 for i, c in enumerate(vocab)}  # 0 reserved for PAD\n        self.max_length = max_length\n        with file_path.open() as f:\n            for line in f:\n                obj = json.loads(line)\n                self.samples.append((obj[text_key], int(obj[label_key])))\n\n    def __len__(self):\n        return len(self.samples)\n\n    def encode(self, text: str):\n        indices = [self.char2idx.get(ch, 0) for ch in text.lower()][: self.max_length]\n        if len(indices) < self.max_length:\n            indices += [0] * (self.max_length - len(indices))\n        return torch.tensor(indices, dtype=torch.long)\n\n    def __getitem__(self, idx):\n        text, label = self.samples[idx]\n        return self.encode(text), label\n\n\nclass AlpacaBERTDataset(Dataset):\n    def __init__(self, file_path: Path, tokenizer, max_length: int, label_key: str = \"label\", text_key: str = \"text\"):\n        self.samples = []\n        self.tokenizer = tokenizer\n        self.max_length = max_length\n        with file_path.open() as f:\n            for line in f:\n                obj = json.loads(line)\n                self.samples.append((obj[text_key], int(obj[label_key])))\n\n    def __len__(self):\n        return len(self.samples)\n\n    def __getitem__(self, idx):\n        text, label = self.samples[idx]\n        enc = self.tokenizer(\n            text,\n            truncation=True,\n            padding=\"max_length\",\n            max_length=self.max_length,\n            return_tensors=\"pt\",\n        )\n        input_ids = enc[\"input_ids\"].squeeze(0)\n        return input_ids, label\n\n\ndef get_cifar10_dataloaders(dataset_cfg: DictConfig, training_cfg: DictConfig):\n    mean = dataset_cfg.normalization.mean\n    std = dataset_cfg.normalization.std\n    transform_train = [\n        T.RandomCrop(dataset_cfg.input_size, padding=dataset_cfg.augmentation.random_crop.padding),\n        T.RandomHorizontalFlip(dataset_cfg.augmentation.random_horizontal_flip.p),\n        T.ToTensor(),\n        T.Normalize(mean, std),\n    ]\n    transform_val = [T.ToTensor(), T.Normalize(mean, std)]\n\n    root = Path(dataset_cfg.path)\n    train_set = CIFAR10(root=str(root), train=True, download=True, transform=T.Compose(transform_train))\n    # create train/val split\n    val_len = int(len(train_set) * dataset_cfg.split.val)\n    train_len = len(train_set) - val_len\n    train_set, val_set = random_split(train_set, [train_len, val_len])\n    # Override transforms for val_set\n    val_set.dataset.transform = T.Compose(transform_val)\n\n    train_loader = DataLoader(\n        train_set,\n        batch_size=training_cfg.batch_size,\n        shuffle=True,\n        num_workers=training_cfg.num_workers,\n        pin_memory=True,\n    )\n    val_loader = DataLoader(\n        val_set,\n        batch_size=training_cfg.batch_size,\n        shuffle=False,\n        num_workers=training_cfg.num_workers,\n        pin_memory=True,\n    )\n    return train_loader, val_loader\n\n\ndef get_alpaca_dataloaders(dataset_cfg: DictConfig, training_cfg: DictConfig):\n    path = Path(dataset_cfg.path)\n    train_file = path / \"train.jsonl\"\n    val_file = path / \"val.jsonl\"\n\n    if dataset_cfg.tokenizer == \"char\":\n        vocab = (\n            \"abcdefghijklmnopqrstuvwxyz0123456789,;.!?:'\\\"/\\\\|_@#$%^&*~`+-=<>()[]{} \"\n        )\n        train_set = CharacterDataset(train_file, dataset_cfg.max_length, vocab)\n        val_set = CharacterDataset(val_file, dataset_cfg.max_length, vocab)\n    else:\n        if BertTokenizer is None:\n            raise RuntimeError(\"transformers is required for BERT tokenization\")\n        tokenizer = BertTokenizer.from_pretrained(dataset_cfg.tokenizer)\n        train_set = AlpacaBERTDataset(train_file, tokenizer, dataset_cfg.max_length)\n        val_set = AlpacaBERTDataset(val_file, tokenizer, dataset_cfg.max_length)\n\n    train_loader = DataLoader(\n        train_set,\n        batch_size=training_cfg.batch_size,\n        shuffle=True,\n        num_workers=training_cfg.get(\"num_workers\", 0),\n        pin_memory=True,\n    )\n    val_loader = DataLoader(\n        val_set,\n        batch_size=training_cfg.batch_size,\n        shuffle=False,\n        num_workers=training_cfg.get(\"num_workers\", 0),\n        pin_memory=True,\n    )\n    return train_loader, val_loader\n\n\ndef get_dataloaders(dataset_cfg: DictConfig, training_cfg: DictConfig, trial_mode: bool):\n    if dataset_cfg.name.lower() == \"cifar-10\":\n        loaders = get_cifar10_dataloaders(dataset_cfg, training_cfg)\n    elif dataset_cfg.name.lower() == \"alpaca-cleaned\":\n        loaders = get_alpaca_dataloaders(dataset_cfg, training_cfg)\n    else:\n        raise ValueError(f\"Unsupported dataset {dataset_cfg.name}\")\n\n    if trial_mode:\n        # Reduce dataset size for quick validation\n        train_loader, val_loader = loaders\n        small_train = torch.utils.data.Subset(train_loader.dataset, np.random.choice(len(train_loader.dataset), 512, replace=False))\n        small_val = torch.utils.data.Subset(val_loader.dataset, np.random.choice(len(val_loader.dataset), 512, replace=False))\n        train_loader = DataLoader(small_train, batch_size=training_cfg.batch_size, shuffle=True)\n        val_loader = DataLoader(small_val, batch_size=training_cfg.batch_size, shuffle=False)\n        return train_loader, val_loader\n    return loaders\n",
+    "model_py": "import math\nfrom typing import Any\n\nimport torch\nimport torch.nn as nn\nfrom omegaconf import DictConfig\n\n# -----------------------------------------------------------------------------\n# MobileNetV2 implementation ---------------------------------------------------\n# -----------------------------------------------------------------------------\n\n\ndef _make_divisible(v: float, divisor: int, min_value: Any = None):\n    if min_value is None:\n        min_value = divisor\n    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)\n    if new_v < 0.9 * v:\n        new_v += divisor\n    return new_v\n\n\nclass ConvBNReLU(nn.Sequential):\n    def __init__(self, in_planes, out_planes, kernel_size=3, stride=1, groups=1):\n        padding = (kernel_size - 1) // 2\n        super().__init__(\n            nn.Conv2d(in_planes, out_planes, kernel_size, stride, padding, groups=groups, bias=False),\n            nn.BatchNorm2d(out_planes),\n            nn.ReLU6(inplace=True),\n        )\n\n\nclass InvertedResidual(nn.Module):\n    def __init__(self, inp, oup, stride, expand_ratio):\n        super().__init__()\n        self.stride = stride\n        hidden_dim = int(round(inp * expand_ratio))\n        self.use_res_connect = self.stride == 1 and inp == oup\n\n        layers = []\n        if expand_ratio != 1:\n            # pointwise\n            layers.append(ConvBNReLU(inp, hidden_dim, kernel_size=1))\n        # depthwise\n        layers.append(ConvBNReLU(hidden_dim, hidden_dim, stride=stride, groups=hidden_dim))\n        # pointwise-linear\n        layers.append(\n            nn.Conv2d(hidden_dim, oup, 1, 1, 0, bias=False)\n        )\n        layers.append(nn.BatchNorm2d(oup))\n        self.conv = nn.Sequential(*layers)\n\n    def forward(self, x):\n        if self.use_res_connect:\n            return x + self.conv(x)\n        else:\n            return self.conv(x)\n\n\nclass MobileNetV2(nn.Module):\n    def __init__(self, num_classes=10, width_mult=1.0, dropout=0.2):\n        super().__init__()\n        block = InvertedResidual\n        input_channel = 32\n        last_channel = 1280\n        interverted_residual_setting = [\n            # t, c, n, s\n            [1, 16, 1, 1],\n            [6, 24, 2, 2],\n            [6, 32, 3, 2],\n            [6, 64, 4, 2],\n            [6, 96, 3, 1],\n            [6, 160, 3, 2],\n            [6, 320, 1, 1],\n        ]\n\n        # building first layer\n        input_channel = _make_divisible(input_channel * width_mult, 8)\n        self.last_channel = _make_divisible(last_channel * max(1.0, width_mult), 8)\n        features = [ConvBNReLU(3, input_channel, stride=2)]\n        # building inverted residual blocks\n        for t, c, n, s in interverted_residual_setting:\n            output_channel = _make_divisible(c * width_mult, 8)\n            for i in range(n):\n                stride = s if i == 0 else 1\n                features.append(block(input_channel, output_channel, stride, expand_ratio=t))\n                input_channel = output_channel\n        # building last several layers\n        features.append(ConvBNReLU(input_channel, self.last_channel, kernel_size=1))\n        # make it nn.Sequential\n        self.features = nn.Sequential(*features)\n\n        # building classifier\n        self.classifier = nn.Sequential(\n            nn.Dropout(p=dropout),\n            nn.Linear(self.last_channel, num_classes),\n        )\n\n        self._initialize_weights()\n\n    def forward(self, x):\n        x = self.features(x)\n        x = nn.functional.adaptive_avg_pool2d(x, (1, 1))\n        x = torch.flatten(x, 1)\n        x = self.classifier(x)\n        return x\n\n    def _initialize_weights(self):\n        for m in self.modules():\n            if isinstance(m, nn.Conv2d):\n                nn.init.kaiming_normal_(m.weight, mode=\"fan_out\")\n                if m.bias is not None:\n                    nn.init.zeros_(m.bias)\n            elif isinstance(m, nn.BatchNorm2d):\n                nn.init.ones_(m.weight)\n                nn.init.zeros_(m.bias)\n            elif isinstance(m, nn.Linear):\n                nn.init.normal_(m.weight, 0, 0.01)\n                nn.init.zeros_(m.bias)\n\n\n# -----------------------------------------------------------------------------\n# Tiny Transformer (DistilBERT-like) ------------------------------------------\n# -----------------------------------------------------------------------------\n\n\nclass PatchEmbedding(nn.Module):\n    def __init__(self, img_size: int = 32, patch_size: int = 4, in_chans: int = 3, embed_dim: int = 768):\n        super().__init__()\n        self.img_size = img_size\n        self.patch_size = patch_size\n        num_patches = (img_size // patch_size) ** 2\n        self.num_patches = num_patches\n        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)\n\n    def forward(self, x):\n        x = self.proj(x)  # (B, E, H/P, W/P)\n        x = x.flatten(2).transpose(1, 2)  # (B, N, E)\n        return x\n\n\nclass TransformerEncoderLayer(nn.Module):\n    def __init__(self, dim: int, n_heads: int = 12, dropout: float = 0.1):\n        super().__init__()\n        self.norm1 = nn.LayerNorm(dim)\n        self.attn = nn.MultiheadAttention(dim, n_heads, dropout=dropout, batch_first=True)\n        self.norm2 = nn.LayerNorm(dim)\n        self.mlp = nn.Sequential(\n            nn.Linear(dim, dim * 4),\n            nn.GELU(),\n            nn.Dropout(dropout),\n            nn.Linear(dim * 4, dim),\n            nn.Dropout(dropout),\n        )\n\n    def forward(self, src):\n        src2 = self.attn(src, src, src, need_weights=False)[0]\n        src = src + src2\n        src = self.norm1(src)\n        src2 = self.mlp(src)\n        src = src + src2\n        src = self.norm2(src)\n        return src\n\n\nclass TinyDistilTransformer(nn.Module):\n    def __init__(self, seq_length: int, hidden_size: int = 768, num_layers: int = 6, n_heads: int = 12, dropout: float = 0.1, num_classes: int = 10):\n        super().__init__()\n        self.position_embeddings = nn.Parameter(torch.zeros(1, seq_length, hidden_size))\n        self.layers = nn.ModuleList(\n            [TransformerEncoderLayer(hidden_size, n_heads, dropout) for _ in range(num_layers)]\n        )\n        self.norm = nn.LayerNorm(hidden_size)\n        self.head = nn.Linear(hidden_size, num_classes)\n        self.dropout = nn.Dropout(dropout)\n\n    def forward(self, x):  # x shape (B, N, D)\n        x = x + self.position_embeddings[:, : x.size(1)]\n        for layer in self.layers:\n            x = layer(x)\n        x = self.norm(x)\n        x = x.mean(dim=1)  # global average pooling over tokens\n        x = self.dropout(x)\n        return self.head(x)\n\n\nclass DistilBERTImageClassifier(nn.Module):\n    def __init__(self, img_size: int, patch_size: int, hidden_size: int, num_layers: int, num_classes: int, dropout: float):\n        super().__init__()\n        self.patch_embed = PatchEmbedding(img_size, patch_size, in_chans=3, embed_dim=hidden_size)\n        seq_length = self.patch_embed.num_patches\n        self.transformer = TinyDistilTransformer(\n            seq_length=seq_length,\n            hidden_size=hidden_size,\n            num_layers=num_layers,\n            n_heads=hidden_size // 64,\n            dropout=dropout,\n            num_classes=num_classes,\n        )\n\n    def forward(self, x):\n        x = self.patch_embed(x)\n        return self.transformer(x)\n\n\nclass CharCNN(nn.Module):\n    \"\"\"Character-level CNN classifier used as a 1-D analogue of MobileNet blocks.\"\"\"\n\n    def __init__(self, vocab_size: int, embedding_dim: int, num_classes: int, dropout: float = 0.3):\n        super().__init__()\n        self.embed = nn.Embedding(vocab_size + 1, embedding_dim, padding_idx=0)\n        self.conv = nn.Sequential(\n            nn.Conv1d(embedding_dim, 256, kernel_size=7, padding=3),\n            nn.ReLU(),\n            nn.MaxPool1d(kernel_size=3, stride=3),\n            nn.Conv1d(256, 256, kernel_size=7, padding=3),\n            nn.ReLU(),\n            nn.MaxPool1d(kernel_size=3, stride=3),\n            nn.Conv1d(256, 256, kernel_size=3, padding=1),\n            nn.ReLU(),\n        )\n        self.fc = nn.Sequential(\n            nn.Dropout(dropout),\n            nn.Linear(256, num_classes),\n        )\n\n    def forward(self, x):\n        x = self.embed(x).transpose(1, 2)  # (B, E, L)\n        x = self.conv(x)\n        x = x.mean(dim=2)\n        return self.fc(x)\n\n\n# -----------------------------------------------------------------------------\n# Factory ---------------------------------------------------------------------\n# -----------------------------------------------------------------------------\n\n\ndef get_model(model_cfg: DictConfig, dataset_cfg: DictConfig):\n    name = model_cfg.name.lower()\n    if name == \"mobilenetv2\":\n        if dataset_cfg.name.lower() == \"cifar-10\":\n            return MobileNetV2(\n                num_classes=model_cfg.num_classes,\n                width_mult=model_cfg.width_multiplier,\n                dropout=model_cfg.dropout,\n            )\n        else:  # charCNN version\n            vocab_size = 70  # fixed size matching CharacterDataset\n            return CharCNN(\n                vocab_size=vocab_size,\n                embedding_dim=model_cfg.embedding_dim,\n                num_classes=model_cfg.num_classes,\n                dropout=model_cfg.dropout,\n            )\n    elif name == \"distilbert\":\n        if dataset_cfg.name.lower() == \"cifar-10\":\n            return DistilBERTImageClassifier(\n                img_size=dataset_cfg.input_size,\n                patch_size=model_cfg.image_patch_size,\n                hidden_size=model_cfg.hidden_size,\n                num_layers=model_cfg.num_layers,\n                num_classes=model_cfg.num_classes,\n                dropout=model_cfg.dropout,\n            )\n        else:\n            from transformers import DistilBertForSequenceClassification  # type: ignore\n\n            return DistilBertForSequenceClassification.from_pretrained(\n                model_cfg.pretrained,\n                num_labels=model_cfg.num_labels,\n                dropout=model_cfg.dropout,\n            )\n    else:\n        raise ValueError(f\"Unsupported model name {model_cfg.name}\")\n",
+    "main_py": "import json\nimport os\nimport subprocess\nimport sys\nfrom pathlib import Path\nfrom typing import List\n\nimport hydra\nfrom hydra.core.hydra_config import HydraConfig\nfrom omegaconf import DictConfig\n\n\n@hydra.main(version_base=None, config_path=\"../config\", config_name=\"config\")\ndef _main(cfg: DictConfig) -> None:\n    \"\"\"Main orchestrator: spawns train.py as subprocess and optionally evaluation.\"\"\"\n\n    # Convert relative results_dir to absolute path outside of Hydra run dir\n    results_dir = Path(hydra.utils.to_absolute_path(cfg.results_dir))\n    results_dir.mkdir(parents=True, exist_ok=True)\n\n    # Collect overrides from current invocation to forward --------------------\n    hydra_overrides: List[str] = []\n    # Hydra keeps command-line overrides in hydra.runtime. We can retrieve them.\n    hydra_runtime = HydraConfig.get().overrides.task  # type: ignore\n    for item in hydra_runtime:\n        if not item.startswith(\"run=\") and not item.startswith(\"results_dir=\"):\n            hydra_overrides.append(item)\n\n    # Add trial_mode flag if provided ----------------------------------------\n    if cfg.trial_mode:\n        hydra_overrides.append(\"trial_mode=true\")\n\n    # Build subprocess command -----------------------------------------------\n    cmd = [\n        sys.executable,\n        \"-u\",\n        \"-m\",\n        \"src.train\",\n        f\"run={cfg.run_id}\",\n        f\"results_dir={str(results_dir)}\",\n    ] + hydra_overrides\n\n    print(\"[Main] Launching training subprocess with command:\")\n    print(\" \".join(cmd))\n    subprocess.run(cmd, check=True)\n\n    # After training, optionally run evaluation over all results -------------\n    if cfg.get(\"evaluate_all\", True):\n        eval_cmd = [\n            sys.executable,\n            \"-u\",\n            \"-m\",\n            \"src.evaluate\",\n            f\"results_dir={str(results_dir)}\",\n            # Forward wandb.mode etc.\n        ]\n        for item in hydra_overrides:\n            if item.startswith(\"wandb.mode=\"):\n                eval_cmd.append(item)\n        print(\"[Main] Running evaluation:\")\n        print(\" \".join(eval_cmd))\n        subprocess.run(eval_cmd, check=True)\n\n\nif __name__ == \"__main__\":\n    _main()\n",
+    "pyproject_toml": "[project]\nname = \"comparative_experiments\"\nversion = \"0.1.0\"\ndescription = \"Lightweight model comparison experiments\"\nrequires-python = \">=3.8\"\nauthors = [\n  {name = \"AI Researcher\", email = \"research@example.com\"}\n]\n\n[project.dependencies]\ntorch = \"*\"\ntorchvision = \"*\"\ntransformers = \"*\"\nhydra-core = \">=1.3\"\noptuna = \"*\"\nwandb = \"*\"\nscikit-learn = \"*\"\nmatplotlib = \"*\"\n",
+    "config_yaml": "defaults:\n  - run: comparative-2-MobileNetV2-0.5-3.5M-CIFAR-10\n  - _self_\n\n# Global settings ----------------------------------------------------------------\nresults_dir: results\ntrial_mode: false\n\nwandb:\n  entity: gengaru617\n  project: 251015-test\n  mode: online\n"
 }
